@@ -181,11 +181,39 @@ cat > "$CLIENT_DIR/start.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
+
+# 检查supervisor是否已经运行
+if [ -f supervisord.pid ]; then
+    PID=$(cat supervisord.pid)
+    if ps -p $PID > /dev/null 2>&1; then
+        echo "B-Server客户端已经在运行中 (PID: $PID)"
+        echo "查看状态: ./status.sh"
+        echo "查看日志: ./logs.sh"
+        exit 0
+    else
+        echo "清理旧的PID文件..."
+        rm -f supervisord.pid supervisor.sock
+    fi
+fi
+
+# 启动supervisor
+echo "启动B-Server客户端..."
 supervisord -c supervisord.conf
-echo "B-Server客户端已启动"
-echo "查看状态: ./status.sh"
-echo "停止服务: ./stop.sh"
-echo "查看日志: ./logs.sh"
+
+# 等待启动
+sleep 2
+
+# 检查启动状态
+if supervisorctl -c supervisord.conf status b-server-client | grep -q "RUNNING"; then
+    echo "✅ B-Server客户端启动成功！"
+    echo "查看状态: ./status.sh"
+    echo "停止服务: ./stop.sh"
+    echo "查看日志: ./logs.sh"
+else
+    echo "❌ B-Server客户端启动失败"
+    supervisorctl -c supervisord.conf status
+    exit 1
+fi
 EOF
 
 # 创建状态检查脚本
@@ -193,7 +221,44 @@ cat > "$CLIENT_DIR/status.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
+
+echo "=== B-Server客户端状态 ==="
+echo ""
+
+# 检查supervisor是否运行
+if [ ! -f supervisord.pid ]; then
+    echo "❌ Supervisor未运行"
+    echo "   使用 ./start.sh 启动服务"
+    exit 1
+fi
+
+PID=$(cat supervisord.pid)
+if ! ps -p $PID > /dev/null 2>&1; then
+    echo "❌ Supervisor PID文件存在但进程未运行"
+    echo "   使用 ./start.sh 启动服务"
+    exit 1
+fi
+
+echo "✅ Supervisor正在运行 (PID: $PID)"
+echo ""
+
+# 显示详细状态
+echo "=== 服务状态 ==="
 supervisorctl -c supervisord.conf status
+
+echo ""
+echo "=== 系统信息 ==="
+echo "工作目录: $(pwd)"
+echo "配置文件: supervisord.conf"
+echo "日志文件: client.log"
+echo "PID文件: supervisord.pid"
+
+echo ""
+echo "=== 管理命令 ==="
+echo "查看日志: ./logs.sh"
+echo "停止服务: ./stop.sh"
+echo "重启服务: ./restart.sh"
+echo "更新客户端: ./update.sh"
 EOF
 
 # 创建停止脚本
@@ -201,9 +266,42 @@ cat > "$CLIENT_DIR/stop.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
+
+# 检查supervisor是否运行
+if [ ! -f supervisord.pid ]; then
+    echo "B-Server客户端未在运行"
+    exit 0
+fi
+
+PID=$(cat supervisord.pid)
+if ! ps -p $PID > /dev/null 2>&1; then
+    echo "B-Server客户端未在运行，清理PID文件..."
+    rm -f supervisord.pid supervisor.sock
+    exit 0
+fi
+
+echo "停止B-Server客户端..."
+
+# 停止所有程序
 supervisorctl -c supervisord.conf stop all
+
+# 关闭supervisor
 supervisorctl -c supervisord.conf shutdown
-echo "B-Server客户端已停止"
+
+# 等待停止
+sleep 2
+
+# 检查是否完全停止
+if [ -f supervisord.pid ]; then
+    PID=$(cat supervisord.pid)
+    if ps -p $PID > /dev/null 2>&1; then
+        echo "⚠️  强制终止进程..."
+        kill -9 $PID
+        rm -f supervisord.pid supervisor.sock
+    fi
+fi
+
+echo "✅ B-Server客户端已完全停止"
 EOF
 
 # 创建重启脚本
@@ -211,16 +309,140 @@ cat > "$CLIENT_DIR/restart.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
+
+echo "重启B-Server客户端..."
+
+# 检查supervisor是否运行
+if [ ! -f supervisord.pid ]; then
+    echo "Supervisor未运行，使用 ./start.sh 启动服务"
+    ./start.sh
+    exit $?
+fi
+
+PID=$(cat supervisord.pid)
+if ! ps -p $PID > /dev/null 2>&1; then
+    echo "Supervisor进程未运行，使用 ./start.sh 启动服务"
+    ./start.sh
+    exit $?
+fi
+
+# 重启客户端进程
 supervisorctl -c supervisord.conf restart b-server-client
-echo "B-Server客户端已重启"
+
+# 等待重启
+sleep 2
+
+# 检查重启状态
+if supervisorctl -c supervisord.conf status b-server-client | grep -q "RUNNING"; then
+    echo "✅ B-Server客户端重启成功！"
+    echo "查看状态: ./status.sh"
+    echo "查看日志: ./logs.sh"
+else
+    echo "❌ B-Server客户端重启失败"
+    supervisorctl -c supervisord.conf status
+    exit 1
+fi
 EOF
 
 # 创建日志查看脚本
 cat > "$CLIENT_DIR/logs.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "=== 客户端日志 ==="
-tail -f client.log
+
+# 检查参数
+case "$1" in
+    "tail"|"t")
+        echo "=== 实时日志 (按Ctrl+C退出) ==="
+        tail -f client.log
+        ;;
+    "head"|"h")
+        echo "=== 最新100行日志 ==="
+        tail -100 client.log
+        ;;
+    "all"|"a")
+        echo "=== 完整日志 ==="
+        cat client.log
+        ;;
+    "supervisor"|"s")
+        echo "=== Supervisor日志 ==="
+        if [ -f supervisord.log ]; then
+            tail -100 supervisord.log
+        else
+            echo "supervisor日志文件不存在"
+        fi
+        ;;
+    "clear"|"c")
+        echo "清空日志文件..."
+        > client.log
+        if [ -f supervisord.log ]; then
+            > supervisord.log
+        fi
+        echo "✅ 日志文件已清空"
+        ;;
+    *)
+        echo "=== B-Server客户端日志查看工具 ==="
+        echo ""
+        echo "使用方法: ./logs.sh [选项]"
+        echo ""
+        echo "选项:"
+        echo "  tail, t     - 实时查看日志 (默认)"
+        echo "  head, h     - 查看最新100行"
+        echo "  all, a      - 查看完整日志"
+        echo "  supervisor, s - 查看supervisor日志"
+        echo "  clear, c    - 清空日志文件"
+        echo ""
+        echo "示例:"
+        echo "  ./logs.sh          # 实时查看"
+        echo "  ./logs.sh head     # 查看最新100行"
+        echo "  ./logs.sh all      # 查看完整日志"
+        echo ""
+        echo "=== 实时日志 (按Ctrl+C退出) ==="
+        tail -f client.log
+        ;;
+esac
+EOF
+
+# 创建卸载脚本
+cat > "$CLIENT_DIR/uninstall.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+
+echo "=== B-Server客户端卸载工具 ==="
+echo ""
+
+# 确认卸载
+read -p "确定要卸载B-Server客户端吗？(y/N): " confirm
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "取消卸载"
+    exit 0
+fi
+
+echo "开始卸载..."
+
+# 停止服务
+echo "停止客户端服务..."
+if [ -f "./stop.sh" ]; then
+    ./stop.sh
+else
+    echo "stop.sh不存在，跳过..."
+fi
+
+# 移除cron任务
+echo "移除开机自启动..."
+CLIENT_DIR="$(pwd)"
+if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
+    crontab -l | grep -v "$CLIENT_DIR/start.sh" | crontab -
+    echo "✅ 开机自启动已移除"
+else
+    echo "未找到开机自启动任务"
+fi
+
+# 移除整个客户端目录
+echo "移除客户端文件..."
+cd ..
+rm -rf "$CLIENT_DIR"
+
+echo "✅ B-Server客户端卸载完成"
 EOF
 
 # 创建更新脚本
@@ -259,9 +481,9 @@ with open('client.py.new', 'w') as f:
     
     echo "启动客户端..."
     supervisorctl -c supervisord.conf start b-server-client
-    echo "客户端更新完成"
+    echo "✅ 客户端更新完成"
 else
-    echo "下载失败，启动旧版本客户端..."
+    echo "❌ 下载失败，启动旧版本客户端..."
     supervisorctl -c supervisord.conf start b-server-client
 fi
 EOF
@@ -271,44 +493,25 @@ chmod +x "$CLIENT_DIR"/*.sh
 
 log_success "管理脚本创建完成"
 
-# 创建systemd服务文件（可选）
-if command -v systemctl &> /dev/null; then
-    log_info "创建systemd服务文件..."
-    
-    sudo tee /etc/systemd/system/b-server-client.service > /dev/null << EOF
-[Unit]
-Description=B-Server Monitoring Client
-After=network.target
+# 设置开机自启动（使用cron而不是systemd）
+log_info "设置开机自启动..."
 
-[Service]
-Type=forking
-User=$USER
-WorkingDirectory=$CLIENT_DIR
-ExecStart=$CLIENT_DIR/start.sh
-ExecStop=$CLIENT_DIR/stop.sh
-ExecReload=$CLIENT_DIR/restart.sh
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    sudo systemctl daemon-reload
-    
-    # 启用开机自启动
-    log_info "启用开机自启动..."
-    sudo systemctl enable b-server-client
-    
-    log_success "systemd服务文件创建完成"
-    log_success "开机自启动已启用"
-    log_info "可以使用以下命令管理服务:"
-    log_info "  启动: sudo systemctl start b-server-client"
-    log_info "  停止: sudo systemctl stop b-server-client"
-    log_info "  重启: sudo systemctl restart b-server-client"
-    log_info "  查看状态: sudo systemctl status b-server-client"
-    log_info "  禁用开机自启: sudo systemctl disable b-server-client"
+# 检查是否已经存在cron任务
+if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
+    log_info "开机自启动已存在，跳过..."
+else
+    # 添加开机自启动到cron
+    (crontab -l 2>/dev/null; echo "@reboot sleep 30 && cd $CLIENT_DIR && ./start.sh") | crontab -
+    log_success "开机自启动已添加到cron"
 fi
+
+log_info "开机自启动配置完成"
+log_info "可以使用以下命令管理服务:"
+log_info "  启动: cd $CLIENT_DIR && ./start.sh"
+log_info "  停止: cd $CLIENT_DIR && ./stop.sh"
+log_info "  重启: cd $CLIENT_DIR && ./restart.sh"
+log_info "  查看状态: cd $CLIENT_DIR && ./status.sh"
+log_info "  查看日志: cd $CLIENT_DIR && ./logs.sh"
 
 # 测试客户端配置
 log_info "测试客户端配置..."
@@ -332,7 +535,8 @@ with open('$CLIENT_FILE', 'r') as f:
         print('✗ 服务器地址配置错误')
         sys.exit(1)
     
-    if \"NODE_NAME = '$NODE_NAME'\" in content:
+    # 检查NODE_NAME是否已经不是默认的socket.gethostname()形式
+    if 'NODE_NAME = socket.gethostname()' not in content:
         print('✓ 节点名称配置正确')
     else:
         print('✗ 节点名称配置错误')
@@ -388,19 +592,17 @@ echo "  查看日志: cd $CLIENT_DIR && ./logs.sh"
 echo "  停止服务: cd $CLIENT_DIR && ./stop.sh"
 echo "  重启服务: cd $CLIENT_DIR && ./restart.sh"
 echo "  更新客户端: cd $CLIENT_DIR && ./update.sh"
+echo "  卸载客户端: cd $CLIENT_DIR && ./uninstall.sh"
 echo ""
-if command -v systemctl &> /dev/null; then
-    echo "systemd服务管理:"
-echo "  启动: sudo systemctl start b-server-client"
-echo "  停止: sudo systemctl stop b-server-client"
-echo "  重启: sudo systemctl restart b-server-client"
-echo "  查看状态: sudo systemctl status b-server-client"
-echo "  ✅ 开机自启已启用"
-    echo ""
-fi
+echo "开机自启动："
+echo "  ✅ 已通过cron设置开机自启动"
+echo "  查看cron任务: crontab -l"
+echo "  移除自启动: crontab -e (删除包含 $CLIENT_DIR/start.sh 的行)"
+echo ""
 echo "重要提示:"
 echo "  1. 请确保在服务器管理面板中添加了节点 '$NODE_NAME'"
 echo "  2. 请确保服务器防火墙允许8008端口访问"
 echo "  3. 客户端日志位置: $CLIENT_DIR/client.log"
+echo "  4. 使用 ./start.sh 和 ./stop.sh 来控制服务"
 echo ""
 log_info "安装完成！客户端正在运行中..." 
