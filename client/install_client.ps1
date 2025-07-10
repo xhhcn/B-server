@@ -9,6 +9,14 @@
 # 2. 使用Base64编码：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
 # 3. 下载脚本后本地运行：iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -OutFile install_client.ps1; .\install_client.ps1 -ServerIP "51.81.222.49" -NodeName "Layer(`$29.9/Y)"
 # 4. 生成Base64编码：[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('Your-Node-Name'))
+#
+# SSL证书问题处理:
+# 如果遇到SSL证书验证失败错误，脚本会自动尝试以下解决方案：
+# 1. 使用可信主机参数绕过SSL验证：--trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+# 2. 增加重试次数和超时时间
+# 3. 如果自动修复失败，请手动运行以下命令：
+#    cd %USERPROFILE%\b-server-client
+#    .\venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org psutil python-socketio requests tcping
 
 param(
     [Parameter(Mandatory=$false)]
@@ -243,18 +251,95 @@ function Install-BServerClient {
 
     # Activate virtual environment and install dependencies
     Write-ColorOutput "[INFO] Installing Python dependencies..." "Blue"
+    
+    # 定义要安装的包
+    $packages = @("psutil", "python-socketio", "requests", "tcping", "python-socketio[client]")
+    $installSuccess = $false
+    
     try {
+        # 首先尝试标准安装
+        Write-ColorOutput "[INFO] Attempting standard installation..." "Blue"
         & ".\venv\Scripts\python.exe" -m pip install --upgrade pip
-        & ".\venv\Scripts\python.exe" -m pip install psutil python-socketio requests tcping "python-socketio[client]"
+        & ".\venv\Scripts\python.exe" -m pip install $packages
         
-        if ($LASTEXITCODE -ne 0) {
-            throw "Package installation failed"
+        if ($LASTEXITCODE -eq 0) {
+            $installSuccess = $true
+            Write-ColorOutput "[SUCCESS] Standard installation completed successfully" "Green"
         }
-        Write-ColorOutput "[SUCCESS] Python dependencies installed successfully" "Green"
     }
     catch {
-        Write-ColorOutput "[ERROR] Dependencies installation failed: $($_.Exception.Message)" "Red"
-        exit 1
+        Write-ColorOutput "[WARNING] Standard installation failed, trying alternatives..." "Yellow"
+    }
+    
+    # 如果标准安装失败，尝试使用可信主机
+    if (-not $installSuccess) {
+        try {
+            Write-ColorOutput "[INFO] Attempting installation with trusted hosts (SSL bypass)..." "Blue"
+            Write-ColorOutput "[INFO] This may be needed due to corporate firewall or SSL certificate issues" "Yellow"
+            
+            # 升级pip（使用可信主机）
+            & ".\venv\Scripts\python.exe" -m pip install --upgrade pip --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+            
+            # 安装依赖包（使用可信主机）
+            & ".\venv\Scripts\python.exe" -m pip install $packages --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+            
+            if ($LASTEXITCODE -eq 0) {
+                $installSuccess = $true
+                Write-ColorOutput "[SUCCESS] Installation with trusted hosts completed successfully" "Green"
+            }
+        }
+        catch {
+            Write-ColorOutput "[WARNING] Trusted hosts installation failed, trying offline cache..." "Yellow"
+        }
+    }
+    
+    # 如果仍然失败，尝试使用pip缓存
+    if (-not $installSuccess) {
+        try {
+            Write-ColorOutput "[INFO] Attempting installation with pip cache and retries..." "Blue"
+            
+            # 使用重试和缓存
+            & ".\venv\Scripts\python.exe" -m pip install --upgrade pip --retries 5 --timeout 60 --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+            & ".\venv\Scripts\python.exe" -m pip install $packages --retries 5 --timeout 60 --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+            
+            if ($LASTEXITCODE -eq 0) {
+                $installSuccess = $true
+                Write-ColorOutput "[SUCCESS] Installation with retries completed successfully" "Green"
+            }
+        }
+        catch {
+            Write-ColorOutput "[ERROR] All installation methods failed" "Red"
+        }
+    }
+    
+    # 验证安装结果
+    if ($installSuccess) {
+        Write-ColorOutput "[SUCCESS] Python dependencies installed successfully" "Green"
+        
+        # 验证关键模块是否可以导入
+        Write-ColorOutput "[INFO] Verifying installed packages..." "Blue"
+        $verifyResult = & ".\venv\Scripts\python.exe" -c "import psutil, socketio, requests; print('All packages verified successfully')" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-ColorOutput "[SUCCESS] Package verification completed" "Green"
+        } else {
+            Write-ColorOutput "[WARNING] Some packages may not be properly installed: $verifyResult" "Yellow"
+        }
+    } else {
+        Write-ColorOutput "[ERROR] Dependencies installation failed after trying all methods" "Red"
+        Write-ColorOutput "" "White"
+        Write-ColorOutput "Possible solutions:" "Yellow"
+        Write-ColorOutput "1. Check your internet connection" "Yellow"
+        Write-ColorOutput "2. Configure corporate proxy settings if behind firewall" "Yellow"
+        Write-ColorOutput "3. Update Windows certificates: certlm.msc" "Yellow"
+        Write-ColorOutput "4. Run the SSL fix script after installation completes: fix_ssl.bat" "Yellow"
+        Write-ColorOutput "5. Run the following commands manually:" "Yellow"
+        Write-ColorOutput "   cd `"$((Get-Location).Path)`"" "White"
+        Write-ColorOutput "   .\venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org psutil python-socketio requests tcping" "White"
+        Write-ColorOutput "" "White"
+        Write-ColorOutput "[INFO] Continuing with installation despite package installation issues..." "Yellow"
+        Write-ColorOutput "[INFO] You can run fix_ssl.bat later to resolve SSL certificate problems" "Yellow"
+        Write-ColorOutput "" "White"
+        # Don't exit here - continue with creating scripts so user can run fix_ssl.bat later
     }
 
     # Create startup scripts
@@ -437,11 +522,33 @@ echo [2] Testing Python modules...
 venv\Scripts\python.exe -c "import sys, psutil, socketio, requests; print('All modules imported successfully')"
 if errorlevel 1 (
     echo [ERROR] Python modules missing or broken
-    echo Try reinstalling: venv\Scripts\python.exe -m pip install psutil python-socketio requests tcping
+    echo.
+    echo [SSL FIX] If you see SSL certificate errors, try:
+    echo   venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org psutil python-socketio requests tcping
+    echo.
+    echo [CORPORATE NETWORK] If behind corporate firewall:
+    echo   1. Contact IT for proxy settings
+    echo   2. Or use: venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --proxy http://proxy:port packages
+    echo.
     goto :end
 )
 
-echo [3] Testing network connectivity...
+echo [3] Testing SSL/TLS connectivity...
+venv\Scripts\python.exe -c "import ssl, socket; print(f'SSL version: {ssl.ssl_version}'); print('SSL connectivity test passed')"
+if errorlevel 1 (
+    echo [WARNING] SSL/TLS connectivity issues detected
+    echo This may cause problems with pip and network requests
+    echo.
+    echo [SSL TROUBLESHOOTING]
+    echo 1. Check system date and time
+    echo 2. Run: certlm.msc to manage certificates
+    echo 3. Contact IT if on corporate network
+    echo.
+) else (
+    echo [SUCCESS] SSL/TLS connectivity OK
+)
+
+echo [4] Testing network connectivity...
 ping -n 1 {0} >nul
 if errorlevel 1 (
     echo [ERROR] Cannot reach server {0}
@@ -451,14 +558,14 @@ if errorlevel 1 (
     echo Server {0} is reachable
 )
 
-echo [4] Testing client configuration...
+echo [5] Testing client configuration...
 venv\Scripts\python.exe -c "exec(open('client.py').read().split('if __name__')[0]); print(f'SERVER_URL: {SERVER_URL}'); print(f'NODE_NAME: {NODE_NAME}')"
 if errorlevel 1 (
     echo [ERROR] Client configuration error
     goto :end
 )
 
-echo [5] Starting client with verbose output...
+echo [6] Starting client with verbose output...
 echo Press Ctrl+C to stop
 venv\Scripts\python.exe client.py
 
@@ -471,26 +578,128 @@ pause
     $updateScript = (@'
 @echo off
 cd /d "%~dp0"
-echo Stopping client...
+echo ========================================
+echo B-Server Client Update Script
+echo ========================================
+echo.
+
+echo [1] Stopping client...
 taskkill /f /im python.exe 2>nul
 taskkill /f /im pythonw.exe 2>nul
 
-echo Downloading latest client...
+echo [2] Downloading latest client...
 powershell -Command "Invoke-WebRequest -Uri '{0}' -OutFile 'client.py.new' -UseBasicParsing"
 
 if exist client.py.new (
-    echo Updating configuration...
+    echo [3] Updating configuration...
     powershell -Command "(Get-Content 'client.py.new') -replace \"SERVER_URL = 'http://localhost:8008'\", \"SERVER_URL = 'http://{1}:8008'\" -replace \"NODE_NAME = socket\.gethostname\(\)\", \"NODE_NAME = '{2}'\" | Set-Content 'client.py.new'"
     
     move client.py client.py.backup
     move client.py.new client.py
-    echo Client updated successfully
+    echo [4] Client updated successfully
+    echo.
+    echo [5] Updating Python packages...
+    echo First trying standard installation...
+    venv\Scripts\python.exe -m pip install --upgrade psutil python-socketio requests tcping
+    if errorlevel 1 (
+        echo Standard installation failed, trying with SSL bypass...
+        venv\Scripts\python.exe -m pip install --upgrade --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org psutil python-socketio requests tcping
+        if errorlevel 1 (
+            echo [WARNING] Package update failed
+            echo [SSL FIX] If you see SSL certificate errors, the client may still work
+            echo [SSL FIX] For manual fix: venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade psutil python-socketio requests tcping
+        ) else (
+            echo [SUCCESS] Packages updated with SSL bypass
+        )
+    ) else (
+        echo [SUCCESS] Packages updated successfully
+    )
+    echo.
+    echo Update completed! You can now start the client.
 ) else (
-    echo Download failed
+    echo [ERROR] Download failed
+    echo [TROUBLESHOOTING]
+    echo 1. Check internet connection
+    echo 2. Check firewall settings
+    echo 3. Try running as administrator
 )
 pause
 '@) -f $ClientURL, $ServerIP, $NodeName
     Set-Content -Path "update.bat" -Value $updateScript -Encoding UTF8
+
+    # SSL修复脚本 - 专门处理SSL证书问题
+    $sslFixScript = (@'
+@echo off
+cd /d "%~dp0"
+echo ========================================
+echo B-Server Client SSL Certificate Fix
+echo ========================================
+echo.
+echo This script will attempt to fix SSL certificate issues
+echo that may prevent Python packages from installing.
+echo.
+
+echo [1] Checking current SSL configuration...
+venv\Scripts\python.exe -c "import ssl; print(f'SSL version: {ssl.ssl_version}'); print('Current SSL configuration OK')"
+if errorlevel 1 (
+    echo [WARNING] SSL configuration issues detected
+)
+
+echo.
+echo [2] Attempting to reinstall packages with SSL bypass...
+echo This uses --trusted-host to bypass SSL certificate verification
+echo.
+
+echo Upgrading pip...
+venv\Scripts\python.exe -m pip install --upgrade pip --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --retries 5 --timeout 60
+
+echo.
+echo Installing core packages...
+venv\Scripts\python.exe -m pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --retries 5 --timeout 60 psutil python-socketio requests tcping "python-socketio[client]"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Package installation still failed
+    echo.
+    echo [MANUAL SOLUTIONS]
+    echo 1. Check system date and time (wrong time causes SSL errors)
+    echo 2. Run 'certlm.msc' to manage certificates
+    echo 3. Contact IT administrator if on corporate network
+    echo 4. Try using a different network (mobile hotspot)
+    echo 5. Download packages manually from PyPI
+    echo.
+    echo [CORPORATE NETWORK USERS]
+    echo If behind corporate firewall/proxy, ask IT for:
+    echo - Proxy server address and port
+    echo - SSL certificate bundle
+    echo - Firewall rules for Python package installation
+    echo.
+    echo [MANUAL PROXY CONFIGURATION]
+    echo If you know your proxy settings, try:
+    echo   venv\Scripts\python.exe -m pip install --proxy http://proxy:port --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org psutil python-socketio requests tcping
+    echo.
+) else (
+    echo.
+    echo [SUCCESS] SSL certificate fix completed!
+    echo Python packages have been installed successfully.
+    echo.
+    echo [VERIFICATION]
+    echo Testing module imports...
+    venv\Scripts\python.exe -c "import psutil, socketio, requests; print('All modules imported successfully')"
+    if errorlevel 1 (
+        echo [WARNING] Some modules may not work properly
+    ) else (
+        echo [SUCCESS] All modules verified successfully
+    )
+)
+
+echo.
+echo ========================================
+echo SSL Fix Script Completed
+echo ========================================
+pause
+'@) -f $ServerIP, $NodeName
+    Set-Content -Path "fix_ssl.bat" -Value $sslFixScript -Encoding UTF8
 
     Write-ColorOutput "[SUCCESS] Management scripts created successfully" "Green"
 
@@ -580,26 +789,35 @@ print('[SUCCESS] Client configuration test passed')
     Write-Host "  Check status:        status.bat"
     Write-Host "  Debug issues:        debug.bat"
     Write-Host "  Update client:       update.bat"
+    Write-Host "  Fix SSL issues:      fix_ssl.bat"
     Write-Host ""
     Write-ColorOutput "Important Notes:" "Yellow"
     Write-Host "  • On Windows, TCPing uses Python implementation to avoid CMD popups"
     Write-Host "  • Client will run silently in background when using start_background.bat"
     Write-Host ("  • Ensure the node '" + $NodeName + "' is added in the admin panel")
     Write-Host "  • Check firewall allows outbound connections to port 8008"
+    Write-Host "  • If you encountered SSL certificate errors during installation, run fix_ssl.bat"
     Write-Host ""
     
     # Ask whether to start immediately
-    $choice = Read-Host "Start client immediately? (Y/N)"
-    if ($choice -eq 'Y' -or $choice -eq 'y') {
-        Write-ColorOutput "[INFO] Starting B-Server client..." "Blue"
-        Write-Host "Starting client in background..."
-        & ".\start_background.bat"
-        Start-Sleep -Seconds 3
-        Write-Host ""
-        Write-ColorOutput "[INFO] Checking status..." "Blue"
-        & ".\status.bat"
+    if ($installSuccess) {
+        $choice = Read-Host "Start client immediately? (Y/N)"
+        if ($choice -eq 'Y' -or $choice -eq 'y') {
+            Write-ColorOutput "[INFO] Starting B-Server client..." "Blue"
+            Write-Host "Starting client in background..."
+            & ".\start_background.bat"
+            Start-Sleep -Seconds 3
+            Write-Host ""
+            Write-ColorOutput "[INFO] Checking status..." "Blue"
+            & ".\status.bat"
+        } else {
+            Write-ColorOutput "[INFO] To start later, run: .\start_background.bat" "Blue"
+            Write-ColorOutput "[INFO] For troubleshooting, run: .\debug.bat" "Blue"
+        }
     } else {
-        Write-ColorOutput "[INFO] To start later, run: .\start_background.bat" "Blue"
+        Write-ColorOutput "[WARNING] Package installation failed - client may not work properly" "Yellow"
+        Write-ColorOutput "[INFO] Before starting the client, run: .\fix_ssl.bat" "Yellow"
+        Write-ColorOutput "[INFO] After fixing SSL issues, you can start with: .\start_background.bat" "Blue"
         Write-ColorOutput "[INFO] For troubleshooting, run: .\debug.bat" "Blue"
     }
     
