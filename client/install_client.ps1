@@ -124,14 +124,13 @@ function Install-BServerClient {
     try {
         $content = Get-Content -Path "client.py" -Raw -Encoding UTF8
         
-        # 修改SERVER_URL - 使用变量展开
-        $newServerUrl = "SERVER_URL = 'http://${ServerIP}:8008'"
+        # 修改SERVER_URL - 使用单引号避免变量展开
+        $newServerUrl = 'SERVER_URL = ''http://' + $ServerIP + ':8008'''
         $content = $content -replace "SERVER_URL = 'http://localhost:8008'", $newServerUrl
         
-        # 修改NODE_NAME - 安全处理特殊字符
-        # 使用 [regex]::Escape 来转义PowerShell特殊字符
-        $escapedNodeName = [regex]::Escape($NodeName)
-        $newNodeName = "NODE_NAME = '$NodeName'"  # 保持原始节点名，不转义引号内容
+        # 修改NODE_NAME - 安全处理特殊字符，避免PowerShell变量展开
+        # 使用单引号字符串拼接，避免$符号被解释为变量
+        $newNodeName = 'NODE_NAME = ''' + $NodeName + ''''
         $content = $content -replace "NODE_NAME = socket\.gethostname\(\)", $newNodeName
         
         Set-Content -Path "client.py" -Value $content -Encoding UTF8
@@ -139,12 +138,12 @@ function Install-BServerClient {
         # 验证修改是否成功
         $verifyContent = Get-Content -Path "client.py" -Raw -Encoding UTF8
         
-        # 检查SERVER_URL是否修改成功
-        $expectedServerUrl = "SERVER_URL = 'http://${ServerIP}:8008'"
+        # 检查SERVER_URL是否修改成功 - 使用单引号避免变量展开
+        $expectedServerUrl = 'SERVER_URL = ''http://' + $ServerIP + ':8008'''
         $serverUrlFound = $verifyContent.Contains($expectedServerUrl)
         
-        # 检查NODE_NAME是否修改成功
-        $expectedNodeName = "NODE_NAME = '$NodeName'"
+        # 检查NODE_NAME是否修改成功 - 使用单引号避免变量展开
+        $expectedNodeName = 'NODE_NAME = ''' + $NodeName + ''''
         $nodeNameFound = $verifyContent.Contains($expectedNodeName)
         
         Write-ColorOutput "[DEBUG] Expected Server URL: $expectedServerUrl" "Yellow"
@@ -154,8 +153,8 @@ function Install-BServerClient {
         
         if ($serverUrlFound -and $nodeNameFound) {
             Write-ColorOutput "[SUCCESS] Client configuration modified successfully" "Green"
-            Write-ColorOutput "[INFO] Server URL: http://${ServerIP}:8008" "Blue"
-            Write-ColorOutput "[INFO] Node Name: ${NodeName}" "Blue"
+            Write-ColorOutput ("[INFO] Server URL: http://" + $ServerIP + ":8008") "Blue"
+            Write-ColorOutput ("[INFO] Node Name: " + $NodeName) "Blue"
         } else {
             # 显示实际的配置内容用于调试
             $relevantLines = $verifyContent -split "`n" | Where-Object { $_ -match "SERVER_URL|NODE_NAME" } | Select-Object -First 10
@@ -168,8 +167,8 @@ function Install-BServerClient {
     }
     catch {
         Write-ColorOutput "[ERROR] Configuration file modification failed: $($_.Exception.Message)" "Red"
-        Write-ColorOutput "[DEBUG] ServerIP: '${ServerIP}'" "Yellow"
-        Write-ColorOutput "[DEBUG] NodeName: '${NodeName}'" "Yellow"
+        Write-ColorOutput ("[DEBUG] ServerIP: '" + $ServerIP + "'") "Yellow"
+        Write-ColorOutput ("[DEBUG] NodeName: '" + $NodeName + "'") "Yellow"
         
         # 显示文件的前几行用于调试
         try {
@@ -217,35 +216,35 @@ function Install-BServerClient {
     # Create startup scripts
     Write-ColorOutput "[INFO] Creating management scripts..." "Blue"
     
-    # 启动脚本 - 带详细错误信息
-    $startScript = @"
+    # 启动脚本 - 使用占位符避免变量展开问题
+    $startScript = @'
 @echo off
 cd /d "%~dp0"
 echo Starting B-Server Client...
-echo Server: ${ServerIP}:8008
-echo Node: ${NodeName}
+echo Server: {0}:8008
+echo Node: {1}
 echo.
 venv\Scripts\python.exe client.py
 if errorlevel 1 (
     echo.
     echo [ERROR] Client failed to start. Error code: %errorlevel%
     echo Check the following:
-    echo 1. Server ${ServerIP}:8008 is accessible
-    echo 2. Node '${NodeName}' is added in admin panel
+    echo 1. Server {0}:8008 is accessible
+    echo 2. Node '{1}' is added in admin panel
     echo 3. Firewall allows outbound connections to port 8008
     echo.
 )
 pause
-"@
+'@ -f $ServerIP, $NodeName
     Set-Content -Path "start.bat" -Value $startScript -Encoding UTF8
 
-    # 后台启动脚本 - 修复并添加错误检查
-    $startBackgroundScript = @"
+    # 后台启动脚本 - 使用占位符避免变量展开问题
+    $startBackgroundScript = @'
 @echo off
 cd /d "%~dp0"
 echo Starting B-Server Client in background...
-echo Server: ${ServerIP}:8008
-echo Node: ${NodeName}
+echo Server: {0}:8008
+echo Node: {1}
 echo.
 
 REM 先停止现有进程
@@ -267,7 +266,7 @@ if %errorlevel%==0 (
     echo Try running start.bat to see detailed error messages
 )
 echo.
-"@
+'@ -f $ServerIP, $NodeName
     Set-Content -Path "start_background.bat" -Value $startBackgroundScript -Encoding UTF8
 
     # 停止脚本 - 修复版本，使用简单直接的方法
@@ -332,14 +331,14 @@ pause
 "@
     Set-Content -Path "stop.bat" -Value $stopScript -Encoding UTF8
 
-    # 状态检查脚本 - 增强版
-    $statusScript = @"
+    # 状态检查脚本 - 使用占位符避免变量展开问题
+    $statusScript = @'
 @echo off
 echo ========================================
 echo B-Server Client Status Check
 echo ========================================
-echo Server: ${ServerIP}:8008
-echo Node: ${NodeName}
+echo Server: {0}:8008
+echo Node: {1}
 echo Installation: %~dp0
 echo.
 echo Checking processes...
@@ -361,24 +360,24 @@ if %errorlevel%==0 (
         echo.
         echo To troubleshoot:
         echo   1. Run start.bat to see error messages
-        echo   2. Check if server ${ServerIP}:8008 is accessible
-        echo   3. Ensure node '${NodeName}' exists in admin panel
+        echo   2. Check if server {0}:8008 is accessible
+        echo   3. Ensure node '{1}' exists in admin panel
     )
 )
 echo.
 pause
-"@
+'@ -f $ServerIP, $NodeName
     Set-Content -Path "status.bat" -Value $statusScript -Encoding UTF8
 
-    # 调试脚本 - 新增
-    $debugScript = @"
+    # 调试脚本 - 使用占位符避免变量展开问题
+    $debugScript = @'
 @echo off
 cd /d "%~dp0"
 echo ========================================
 echo B-Server Client Debug Information
 echo ========================================
-echo Server: ${ServerIP}:8008
-echo Node: ${NodeName}
+echo Server: {0}:8008
+echo Node: {1}
 echo Installation: %~dp0
 echo Time: %date% %time%
 echo.
@@ -399,13 +398,13 @@ if errorlevel 1 (
 )
 
 echo [3] Testing network connectivity...
-ping -n 1 ${ServerIP} >nul
+ping -n 1 {0} >nul
 if errorlevel 1 (
-    echo [ERROR] Cannot reach server ${ServerIP}
+    echo [ERROR] Cannot reach server {0}
     echo Check network connection and firewall
     goto :end
 ) else (
-    echo Server ${ServerIP} is reachable
+    echo Server {0} is reachable
 )
 
 echo [4] Testing client configuration...
@@ -421,11 +420,11 @@ venv\Scripts\python.exe client.py
 
 :end
 pause
-"@
+'@ -f $ServerIP, $NodeName
     Set-Content -Path "debug.bat" -Value $debugScript -Encoding UTF8
 
-    # 更新脚本 - 使用字符串格式化避免变量插值问题
-    $updateScript = @"
+    # 更新脚本 - 使用占位符避免变量展开问题
+    $updateScript = @'
 @echo off
 cd /d "%~dp0"
 echo Stopping client...
@@ -446,7 +445,7 @@ if exist client.py.new (
     echo Download failed
 )
 pause
-"@ -f $ClientURL, $ServerIP, $NodeName
+'@ -f $ClientURL, $ServerIP, $NodeName
     Set-Content -Path "update.bat" -Value $updateScript -Encoding UTF8
 
     Write-ColorOutput "[SUCCESS] Management scripts created successfully" "Green"
@@ -478,7 +477,7 @@ Write-Host "4. Run: .\nssm.exe start `$serviceName"
     Write-ColorOutput "[INFO] Testing client configuration..." "Blue"
     try {
         # Create test script dynamically to avoid variable interpolation issues
-        $testContent = @"
+        $testContent = @'
 import sys, os
 sys.path.insert(0, os.getcwd())
 try:
@@ -504,7 +503,7 @@ with open('client.py', 'r', encoding='utf-8') as f:
         sys.exit(1)
 
 print('[SUCCESS] Client configuration test passed')
-"@ -f $ServerIP, $NodeName
+'@ -f $ServerIP, $NodeName
 
         $testResult = & ".\venv\Scripts\python.exe" -c $testContent
 
@@ -527,8 +526,8 @@ print('[SUCCESS] Client configuration test passed')
     Write-ColorOutput "" "White"
     Write-ColorOutput "Installation Information:" "Blue"
     Write-Host "  Installation Directory: $ClientDir"
-    Write-Host "  Server Address: ${ServerIP}:8008"
-    Write-Host "  Node Name: ${NodeName}"
+    Write-Host ("  Server Address: " + $ServerIP + ":8008")
+    Write-Host ("  Node Name: " + $NodeName)
     Write-Host ""
     Write-ColorOutput "Management Commands:" "Blue"
     Write-Host "  Start (foreground):  start.bat"
@@ -541,8 +540,8 @@ print('[SUCCESS] Client configuration test passed')
     Write-ColorOutput "Important Notes:" "Yellow"
     Write-Host "  • On Windows, TCPing uses Python implementation to avoid CMD popups"
     Write-Host "  • Client will run silently in background when using start_background.bat"
-    Write-Host "  • Ensure the node '${NodeName}' is added in the admin panel"
-            Write-Host "  • Check firewall allows outbound connections to port 8008"
+    Write-Host ("  • Ensure the node '" + $NodeName + "' is added in the admin panel")
+    Write-Host "  • Check firewall allows outbound connections to port 8008"
     Write-Host ""
     
     # Ask whether to start immediately
