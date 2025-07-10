@@ -4,11 +4,11 @@
 # 方法2: .\install_client.ps1 -ServerIP "192.168.1.100" -NodeName "MyServer"
 #
 # 特殊字符处理:
-# 如果NodeName包含$符号，请使用以下方式之一：
-# 1. 转义$符号：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeName 'Layer(`$29.9/Y)'"
+# 如果NodeName包含特殊符号（如美元符号），请使用以下方式之一：
+# 1. 转义符号：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeName 'Layer(`$29.9/Y)'"
 # 2. 使用Base64编码：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
 # 3. 下载脚本后本地运行：iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -OutFile install_client.ps1; .\install_client.ps1 -ServerIP "51.81.222.49" -NodeName "Layer(`$29.9/Y)"
-# 4. 生成Base64编码：[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('Layer($29.9/Y)'))
+# 4. 生成Base64编码：[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('Your-Node-Name'))
 
 param(
     [Parameter(Mandatory=$false)]
@@ -86,11 +86,11 @@ function Install-BServerClient {
     Write-ColorOutput ("[DEBUG] Raw NodeName: '" + $NodeName + "'") "Yellow"
     
     # 检查节点名称是否包含特殊字符并提供建议
-    if ($NodeName -match '[$(){}[\]^|&<>]') {
+    $hasSpecialChars = $NodeName.Contains('$') -or $NodeName.Contains('(') -or $NodeName.Contains(')') -or $NodeName.Contains('[') -or $NodeName.Contains(']') -or $NodeName.Contains('&') -or $NodeName.Contains('|')
+    if ($hasSpecialChars) {
         Write-ColorOutput "[WARNING] Node name contains special characters that may cause issues!" "Yellow"
         $base64NodeName = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($NodeName))
-        Write-ColorOutput "[SUGGESTION] For better compatibility, use Base64 encoding:" "Yellow"
-        Write-ColorOutput "[SUGGESTION] -NodeNameBase64 '$base64NodeName'" "Yellow"
+        Write-ColorOutput ("[SUGGESTION] For better compatibility, use Base64 encoding: -NodeNameBase64 '" + $base64NodeName + "'") "Yellow"
         Write-ColorOutput "[SUGGESTION] Complete command:" "Yellow"
         $suggestedCommand = 'powershell -ExecutionPolicy Bypass -Command "iwr -Uri ''https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1'' -UseBasicParsing | iex; Install-BServerClient -ServerIP ''' + $ServerIP + ''' -NodeNameBase64 ''' + $base64NodeName + '''"'
         Write-ColorOutput $suggestedCommand "Cyan"
@@ -191,7 +191,7 @@ function Install-BServerClient {
         # 额外验证：显示实际的节点名称长度和内容
         Write-ColorOutput ("[DEBUG] Node Name length: " + $NodeName.Length) "Yellow"
         Write-ColorOutput ("[DEBUG] Node Name bytes: " + [System.Text.Encoding]::UTF8.GetBytes($NodeName).Length) "Yellow"
-        Write-ColorOutput ("[DEBUG] Node Name contains $: " + $NodeName.Contains('$')) "Yellow"
+        Write-ColorOutput ("[DEBUG] Node Name contains dollar sign: " + $NodeName.Contains('$')) "Yellow"
         
         if ($serverUrlFound -and $nodeNameFound) {
             Write-ColorOutput "[SUCCESS] Client configuration modified successfully" "Green"
@@ -621,7 +621,7 @@ if ($MyInvocation.InvocationName -match '\.ps1$') {
         Write-Host "  .\install_client.ps1 -ServerIP '192.168.1.100' -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
         Write-Host ""
         Write-ColorOutput "[INFO] For special characters in NodeName, use one of these methods:" "Yellow"
-        Write-Host "  1. Escape `$ with backtick: 'Layer(`$29.9/Y)'"
+        Write-Host "  1. Escape dollar sign with backtick: 'Layer(`$29.9/Y)'"
         Write-Host "  2. Use Base64 encoding: -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
         Write-Host "  3. Download script first, then run locally"
         exit 1
