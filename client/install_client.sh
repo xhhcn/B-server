@@ -206,9 +206,9 @@ sleep 2
 # 检查启动状态
 if supervisorctl -c supervisord.conf status b-server-client | grep -q "RUNNING"; then
     echo "✅ B-Server客户端启动成功！"
-    echo "查看状态: ./status.sh"
-    echo "停止服务: ./stop.sh"
-    echo "查看日志: ./logs.sh"
+echo "查看状态: ./status.sh"
+echo "停止服务: ./stop.sh"
+echo "查看日志: ./logs.sh"
 else
     echo "❌ B-Server客户端启动失败"
     supervisorctl -c supervisord.conf status
@@ -397,7 +397,7 @@ case "$1" in
         echo "  ./logs.sh all      # 查看完整日志"
         echo ""
         echo "=== 实时日志 (按Ctrl+C退出) ==="
-        tail -f client.log
+tail -f client.log
         ;;
 esac
 EOF
@@ -431,8 +431,21 @@ fi
 echo "移除开机自启动..."
 CLIENT_DIR="$(pwd)"
 if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
-    crontab -l | grep -v "$CLIENT_DIR/start.sh" | crontab -
-    echo "✅ 开机自启动已移除"
+    # 创建临时cron文件
+    TEMP_CRON=$(mktemp)
+    
+    # 获取现有cron任务并过滤掉B-Server相关的任务
+    crontab -l 2>/dev/null | grep -v "$CLIENT_DIR/start.sh" > "$TEMP_CRON"
+    
+    # 安装新的crontab
+    if crontab "$TEMP_CRON"; then
+        echo "✅ 开机自启动已移除"
+    else
+        echo "❌ 移除开机自启动失败，请手动执行: crontab -e"
+    fi
+    
+    # 清理临时文件
+    rm -f "$TEMP_CRON"
 else
     echo "未找到开机自启动任务"
 fi
@@ -500,13 +513,49 @@ log_info "设置开机自启动..."
 if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
     log_info "开机自启动已存在，跳过..."
 else
-    # 添加开机自启动到cron
-    (crontab -l 2>/dev/null; echo "@reboot sleep 30 && cd $CLIENT_DIR && ./start.sh") | crontab -
-    log_success "开机自启动已添加到cron"
+    log_info "添加开机自启动到cron..."
+    
+    # 创建临时cron文件
+    TEMP_CRON=$(mktemp)
+    
+    # 获取现有的cron任务（如果有的话）
+    crontab -l 2>/dev/null > "$TEMP_CRON" || true
+    
+    # 添加新的开机自启动任务
+    echo "@reboot sleep 30 && cd $CLIENT_DIR && ./start.sh >> $CLIENT_DIR/startup.log 2>&1" >> "$TEMP_CRON"
+    
+    # 安装新的crontab
+    if crontab "$TEMP_CRON"; then
+        log_success "开机自启动已添加到cron"
+        
+        # 验证是否添加成功
+        if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
+            log_success "开机自启动验证成功"
+        else
+            log_warn "开机自启动验证失败，但crontab命令执行成功"
+        fi
+    else
+        log_error "添加开机自启动失败，请手动添加："
+        log_error "运行命令: crontab -e"
+        log_error "添加行: @reboot sleep 30 && cd $CLIENT_DIR && ./start.sh >> $CLIENT_DIR/startup.log 2>&1"
+    fi
+    
+    # 清理临时文件
+    rm -f "$TEMP_CRON"
+fi
+
+# 显示当前cron任务
+log_info "当前cron任务:"
+if crontab -l 2>/dev/null | grep -v "^#" | grep -v "^$"; then
+    crontab -l 2>/dev/null | grep -v "^#" | grep -v "^$" | while read line; do
+        log_info "  $line"
+    done
+else
+    log_warn "未找到cron任务，开机自启动可能设置失败"
 fi
 
 log_info "开机自启动配置完成"
-log_info "可以使用以下命令管理服务:"
+    log_info "可以使用以下命令管理服务:"
 log_info "  启动: cd $CLIENT_DIR && ./start.sh"
 log_info "  停止: cd $CLIENT_DIR && ./stop.sh"
 log_info "  重启: cd $CLIENT_DIR && ./restart.sh"
@@ -598,7 +647,7 @@ echo "开机自启动："
 echo "  ✅ 已通过cron设置开机自启动"
 echo "  查看cron任务: crontab -l"
 echo "  移除自启动: crontab -e (删除包含 $CLIENT_DIR/start.sh 的行)"
-echo ""
+    echo ""
 echo "重要提示:"
 echo "  1. 请确保在服务器管理面板中添加了节点 '$NODE_NAME'"
 echo "  2. 请确保服务器防火墙允许8008端口访问"
