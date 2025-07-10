@@ -4,6 +4,7 @@ import json
 import platform
 import psutil
 import os
+import sys
 import socketio
 import requests
 import subprocess
@@ -59,7 +60,7 @@ _registration_confirmed = False
 _last_successful_data_send = 0
 
 def detect_system_type():
-    """智能检测系统类型"""
+    """智能检测系统类型 - 支持Windows, Linux, macOS"""
     global _cached_system_type
     
     # 如果已经检测过，直接返回缓存结果
@@ -68,536 +69,805 @@ def detect_system_type():
     
     try:
         print("[INFO] 正在检测系统类型...")
-        system_type = "DS"  # 默认类型改为DS（物理机）
-        systemd_virt_result = None  # 记录systemd-detect-virt的结果
+        current_os = platform.system()
+        print(f"[INFO] 当前操作系统: {current_os}")
         
-        # 最优先：通过systemd-detect-virt命令检测（最权威的方法）
-        try:
-            result = subprocess.run(['systemd-detect-virt'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                virt_type = result.stdout.strip().lower()
-                systemd_virt_result = virt_type  # 记录结果
-                print(f"[INFO] systemd-detect-virt 结果: '{virt_type}'")
-                
-                if virt_type == 'none':
-                    # systemd-detect-virt 明确表示这是物理机，直接返回，不执行任何后续检测
-                    _cached_system_type = "DS"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过systemd-detect-virt - 物理机，跳过所有其他检测)")
-                    return _cached_system_type
-                elif virt_type != '':
-                    # 检测到虚拟化环境
-                    virt_map = {
-                        'kvm': 'KVM',
-                        'qemu': 'QEMU', 
-                        'vmware': 'VMware',
-                        'microsoft': 'Hyper-V',
-                        'xen': 'Xen',
-                        'oracle': 'VirtualBox',
-                        'parallels': 'Parallels',
-                        'lxc': 'LXC',
-                        'docker': 'Docker',
-                        'openvz': 'OpenVZ',
-                        'uml': 'UML',
-                        'bochs': 'Bochs',
-                        'chroot': 'Chroot',
-                        'systemd-nspawn': 'Systemd-nspawn',
-                        'rkt': 'rkt',
-                        'container-other': 'Container',
-                        'qnx': 'QNX',
-                        'acrn': 'ACRN',
-                        'powervm': 'PowerVM',
-                        'bhyve': 'bhyve',
-                        'amazon': 'Amazon',
-                        'podman': 'Podman'
-                    }
-                    _cached_system_type = virt_map.get(virt_type, virt_type.upper())
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过systemd-detect-virt)")
-                    return _cached_system_type
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-            print(f"[INFO] systemd-detect-virt 不可用: {e}")
-            systemd_virt_result = "unavailable"  # 标记为不可用
-            pass
+        # 🔧 增强的Windows检测 - 多重保护机制
+        # 检查多个Windows特征，确保在Windows环境下绝不执行Linux代码
+        is_windows = False
         
-        # 如果systemd-detect-virt明确返回none，我们应该在上面已经返回了
-        # 这里应该不会执行到，但为了安全起见再检查一次
-        if systemd_virt_result == 'none':
-            print(f"[INFO] systemd-detect-virt 确认为物理机，强制返回DS")
-            _cached_system_type = "DS"
-            return _cached_system_type
+        # 方法1：platform.system()
+        if current_os == 'Windows':
+            is_windows = True
+            print(f"[DEBUG] Windows检测：platform.system() = 'Windows'")
         
-        # 只有在systemd-detect-virt不可用或结果不明确时，才进行后续检测
-        print(f"[INFO] systemd-detect-virt 结果: {systemd_virt_result}，继续进行其他检测...")
+        # 方法2：检查os.name
+        if os.name == 'nt':
+            is_windows = True
+            print(f"[DEBUG] Windows检测：os.name = 'nt'")
         
-        # 检测容器环境 - 使用更精确的方法
-        # 1. 检查 /.dockerenv 文件（Docker特有）
-        if os.path.exists('/.dockerenv'):
-            print(f"[DEBUG] 发现 /.dockerenv 文件")
-            _cached_system_type = "Docker"
-            print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-            return _cached_system_type
+        # 方法3：检查环境变量
+        if 'WINDIR' in os.environ or 'windir' in os.environ:
+            is_windows = True
+            print(f"[DEBUG] Windows检测：发现WINDIR环境变量")
         
-        # 2. 检查 /run/.containerenv 文件（Podman特有）
-        if os.path.exists('/run/.containerenv'):
-            print(f"[DEBUG] 发现 /run/.containerenv 文件")
-            _cached_system_type = "Podman"
-            print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-            return _cached_system_type
+        # 方法4：检查Windows特有路径
+        if os.path.exists('C:\\Windows') or os.path.exists('c:\\windows'):
+            is_windows = True
+            print(f"[DEBUG] Windows检测：发现Windows目录")
         
-        # 3. 精确检查 /proc/1/cgroup 来检测容器
-        try:
-            with open('/proc/1/cgroup', 'r') as f:
-                cgroup_content = f.read()
-                print(f"[DEBUG] /proc/1/cgroup 内容样本: {cgroup_content[:200]}...")
-                
-                # 检查是否在容器的cgroup中（更精确的判断）
-                lines = cgroup_content.strip().split('\n')
-                for line in lines:
-                    if ':/docker/' in line or line.endswith('/docker'):
-                        print(f"[DEBUG] 发现Docker cgroup路径: {line}")
-                        _cached_system_type = "Docker"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                        return _cached_system_type
-                    elif ':/lxc/' in line or line.endswith('/lxc'):
-                        print(f"[DEBUG] 发现LXC cgroup路径: {line}")
-                        _cached_system_type = "LXC"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                        return _cached_system_type
-                    elif '/kubepods/' in line or 'k8s_' in line:
-                        print(f"[DEBUG] 发现Kubernetes cgroup路径: {line}")
-                        _cached_system_type = "Kubernetes"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                        return _cached_system_type
-                    elif ':/machine.slice/libpod-' in line or '/libpod-' in line:
-                        print(f"[DEBUG] 发现Podman cgroup路径: {line}")
-                        _cached_system_type = "Podman"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                        return _cached_system_type
-                    elif '/containerd/' in line or 'containerd-' in line:
-                        print(f"[DEBUG] 发现Containerd cgroup路径: {line}")
-                        _cached_system_type = "Containerd"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                        return _cached_system_type
-                
-                # 如果没有发现明确的容器路径，但包含容器关键词，需要更谨慎
-                # 避免误判：只有当路径明确指向容器时才判断为容器
-                print(f"[DEBUG] /proc/1/cgroup 检查完成，未发现明确的容器特征")
-                
-        except (FileNotFoundError, PermissionError):
-            print(f"[DEBUG] 无法读取 /proc/1/cgroup")
-            pass
+        # 方法5：检查Python可执行文件路径
+        if 'python.exe' in sys.executable.lower() or 'pythonw.exe' in sys.executable.lower():
+            is_windows = True
+            print(f"[DEBUG] Windows检测：Python可执行文件为.exe格式")
         
-        # 4. 检查容器环境变量
-        try:
-            container_env_vars = ['CONTAINER', 'container', 'DOCKER_CONTAINER']
-            for var in container_env_vars:
-                if var in os.environ:
-                    print(f"[DEBUG] 发现容器环境变量: {var}={os.environ.get(var)}")
-                    _cached_system_type = "Container"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                    return _cached_system_type
-        except:
-            pass
+        # 根据检测结果选择检测策略
+        if is_windows:
+            print(f"[INFO] 确认为Windows系统，执行Windows检测逻辑")
+            _cached_system_type = detect_windows_system_type()
+        elif current_os == 'Linux':
+            print(f"[INFO] 确认为Linux系统，执行Linux检测逻辑")
+            # 额外保护：再次确认不是Windows
+            if not is_windows:
+                _cached_system_type = detect_linux_system_type()
+            else:
+                print(f"[WARN] Linux系统检测被Windows保护机制阻止")
+                _cached_system_type = detect_windows_system_type()
+        elif current_os == 'Darwin':  # macOS
+            print(f"[INFO] 确认为macOS系统，执行macOS检测逻辑")
+            _cached_system_type = detect_macos_system_type()
+        else:
+            print(f"[WARN] 未知操作系统: {current_os}，检查是否为Windows...")
+            if is_windows:
+                print(f"[INFO] 通过多重检测确认为Windows系统")
+                _cached_system_type = detect_windows_system_type()
+            else:
+                print(f"[WARN] 无法确定系统类型，默认为物理机")
+                _cached_system_type = "DS"
         
-        # 容器检测完成，继续进行虚拟化检测
-        print(f"[INFO] 容器检测完成，继续进行虚拟化检测...")
-        
-        # 检测虚拟化环境 - 通过DMI信息
-        try:
-            # 检查系统制造商
-            with open('/sys/class/dmi/id/sys_vendor', 'r') as f:
-                vendor = f.read().strip().lower()
-                print(f"[DEBUG] sys_vendor: '{vendor}'")
-                if 'qemu' in vendor:
-                    _cached_system_type = "QEMU"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'vmware' in vendor:
-                    _cached_system_type = "VMware"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'microsoft corporation' in vendor:
-                    _cached_system_type = "Hyper-V"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'xen' in vendor:
-                    _cached_system_type = "Xen"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'parallels' in vendor:
-                    _cached_system_type = "Parallels"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'bochs' in vendor:
-                    _cached_system_type = "Bochs"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'nutanix' in vendor:
-                    _cached_system_type = "Nutanix AHV"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'red hat' in vendor:
-                    _cached_system_type = "RHEV"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-                elif 'citrix' in vendor:
-                    _cached_system_type = "Citrix Xen"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过sys_vendor)")
-                    return _cached_system_type
-        except (FileNotFoundError, PermissionError):
-            pass
-        
-        # 检查产品名称
-        try:
-            with open('/sys/class/dmi/id/product_name', 'r') as f:
-                product = f.read().strip().lower()
-                print(f"[DEBUG] product_name: '{product}'")
-                if 'virtualbox' in product:
-                    _cached_system_type = "VirtualBox"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'vmware' in product:
-                    _cached_system_type = "VMware"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'kvm' in product:
-                    _cached_system_type = "KVM"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'qemu' in product:
-                    _cached_system_type = "QEMU"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'hyper-v' in product or 'virtual machine' in product:
-                    _cached_system_type = "Hyper-V"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'bochs' in product:
-                    _cached_system_type = "Bochs"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'proxmox' in product:
-                    _cached_system_type = "Proxmox VE"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'openstack' in product:
-                    _cached_system_type = "OpenStack"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'ovirt' in product:
-                    _cached_system_type = "oVirt"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'cloudstack' in product:
-                    _cached_system_type = "CloudStack"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'eucalyptus' in product:
-                    _cached_system_type = "Eucalyptus"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'bhyve' in product:
-                    _cached_system_type = "bhyve"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-                elif 'acrn' in product:
-                    _cached_system_type = "ACRN"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过product_name)")
-                    return _cached_system_type
-        except (FileNotFoundError, PermissionError):
-            pass
-        
-        # 检查BIOS信息
-        try:
-            with open('/sys/class/dmi/id/bios_vendor', 'r') as f:
-                bios_vendor = f.read().strip().lower()
-                print(f"[DEBUG] bios_vendor: '{bios_vendor}'")
-                if 'seabios' in bios_vendor:
-                    _cached_system_type = "KVM"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过bios_vendor)")
-                    return _cached_system_type
-                elif 'vmware' in bios_vendor:
-                    _cached_system_type = "VMware"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过bios_vendor)")
-                    return _cached_system_type
-                elif 'virtualbox' in bios_vendor:
-                    _cached_system_type = "VirtualBox"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过bios_vendor)")
-                    return _cached_system_type
-                elif 'bochs' in bios_vendor:
-                    _cached_system_type = "Bochs"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过bios_vendor)")
-                    return _cached_system_type
-                elif 'tianocore' in bios_vendor:
-                    _cached_system_type = "UEFI VM"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过bios_vendor)")
-                    return _cached_system_type
-        except (FileNotFoundError, PermissionError):
-            pass
-        
-        # 检测云服务商（使用更短的超时时间）
-        try:
-            # AWS检测
-            response = requests.get('http://169.254.169.254/latest/meta-data/instance-id', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "AWS EC2"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # Azure检测
-            headers = {'Metadata': 'true'}
-            response = requests.get('http://169.254.169.254/metadata/instance?api-version=2021-02-01', 
-                                  headers=headers, timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "Azure VM"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # GCP检测
-            headers = {'Metadata-Flavor': 'Google'}
-            response = requests.get('http://metadata.google.internal/computeMetadata/v1/instance/id', 
-                                  headers=headers, timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "GCP VM"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # 阿里云检测
-            response = requests.get('http://100.100.100.200/latest/meta-data/instance-id', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "阿里云ECS"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # 腾讯云检测
-            response = requests.get('http://metadata.tencentcloudapi.com/latest/meta-data/instance-id', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "腾讯云CVM"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # 华为云检测
-            response = requests.get('http://169.254.169.254/openstack/latest/meta_data.json', 
-                                  timeout=1)
-            if response.status_code == 200:
-                data = response.json()
-                if 'availability_zone' in data and 'huawei' in str(data).lower():
-                    _cached_system_type = "华为云ECS"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                    return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # Oracle Cloud检测
-            headers = {'Authorization': 'Bearer Oracle'}
-            response = requests.get('http://169.254.169.254/opc/v1/instance/', 
-                                  headers=headers, timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "Oracle Cloud"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # DigitalOcean检测
-            response = requests.get('http://169.254.169.254/metadata/v1/id', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "DigitalOcean"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # Linode检测
-            response = requests.get('http://169.254.169.254/linode/v1/instance', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "Linode"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        try:
-            # Vultr检测
-            response = requests.get('http://169.254.169.254/v1/instanceid', 
-                                  timeout=1)
-            if response.status_code == 200:
-                _cached_system_type = "Vultr"
-                print(f"[INFO] 检测到系统类型: {_cached_system_type}")
-                return _cached_system_type
-        except:
-            pass
-        
-        # 检查CPU型号来推断虚拟化 - 只在DMI检测无结果时使用
-        try:
-            with open('/proc/cpuinfo', 'r') as f:
-                cpuinfo = f.read().lower()
-                print(f"[DEBUG] 检查 cpuinfo 中的虚拟化标识...")
-                if 'qemu' in cpuinfo:
-                    _cached_system_type = "QEMU"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'kvm' in cpuinfo:
-                    _cached_system_type = "KVM"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'vmware' in cpuinfo:
-                    _cached_system_type = "VMware"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'virtualbox' in cpuinfo:
-                    _cached_system_type = "VirtualBox"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'xen' in cpuinfo:
-                    _cached_system_type = "Xen"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'bochs' in cpuinfo:
-                    _cached_system_type = "Bochs"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-                elif 'bhyve' in cpuinfo:
-                    _cached_system_type = "bhyve"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过cpuinfo)")
-                    return _cached_system_type
-        except (FileNotFoundError, PermissionError):
-            pass
-        
-        # 检查网络接口名称 - 移除容器相关检测，避免误判
-        # 注意：这里只检测虚拟化平台的接口，不检测容器接口
-        try:
-            interfaces = os.listdir('/sys/class/net/')
-            print(f"[DEBUG] 网络接口: {interfaces}")
-            for iface in interfaces:
-                # 只检测明确的虚拟化平台接口，避免误判
-                if iface.startswith('vmbr'):
-                    _cached_system_type = "Proxmox VE"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过网络接口)")
-                    return _cached_system_type
-                # 移除veth和docker接口检查，因为物理机安装Docker后也会有这些接口
-        except:
-            pass
-        
-        # 注意：此处不再检查特殊路径，因为在物理机上也可能存在Xen相关的文件
-        # 比如安装了Xen hypervisor但当前不在虚拟机中运行的情况
-        
-        # 检查串口号来判断云服务商
-        try:
-            with open('/sys/class/dmi/id/product_serial', 'r') as f:
-                serial = f.read().strip().lower()
-                print(f"[DEBUG] product_serial: '{serial}'")
-                if serial.startswith('ec2'):
-                    _cached_system_type = "AWS EC2"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过序列号)")
-                    return _cached_system_type
-                elif 'google' in serial:
-                    _cached_system_type = "GCP VM"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过序列号)")
-                    return _cached_system_type
-                elif 'vmware' in serial:
-                    _cached_system_type = "VMware"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (通过序列号)")
-                    return _cached_system_type
-        except (FileNotFoundError, PermissionError):
-            pass
-        
-        # Windows检测（如果运行在Windows上）
-        if platform.system() == 'Windows':
-            try:
-                import wmi
-                c = wmi.WMI()
-                for computer in c.Win32_ComputerSystem():
-                    model = computer.Model.lower()
-                    manufacturer = computer.Manufacturer.lower()
-                    
-                    if 'virtualbox' in model or 'virtualbox' in manufacturer:
-                        _cached_system_type = "VirtualBox"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-                    elif 'vmware' in model or 'vmware' in manufacturer:
-                        _cached_system_type = "VMware"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-                    elif 'virtual machine' in model or 'microsoft corporation' in manufacturer:
-                        _cached_system_type = "Hyper-V"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-                    elif 'parallels' in model or 'parallels' in manufacturer:
-                        _cached_system_type = "Parallels"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-                    elif 'qemu' in model or 'qemu' in manufacturer:
-                        _cached_system_type = "QEMU"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-                    elif 'bochs' in model or 'bochs' in manufacturer:
-                        _cached_system_type = "Bochs"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (Windows WMI)")
-                        return _cached_system_type
-            except:
-                pass
-        
-        # macOS检测（如果运行在macOS上）
-        if platform.system() == 'Darwin':
-            try:
-                # 检查是否为虚拟机
-                result = subprocess.run(['sysctl', '-n', 'machdep.cpu.features'], 
-                                      capture_output=True, text=True, timeout=3)
-                if result.returncode == 0:
-                    features = result.stdout.lower()
-                    if 'hypervisor' in features:
-                        _cached_system_type = "macOS VM"
-                        print(f"[INFO] 检测到系统类型: {_cached_system_type} (macOS sysctl)")
-                        return _cached_system_type
-                
-                # 检查Parallels
-                if os.path.exists('/Applications/Parallels Desktop.app'):
-                    _cached_system_type = "Parallels"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (macOS)")
-                    return _cached_system_type
-                
-                # 检查VMware Fusion
-                if os.path.exists('/Applications/VMware Fusion.app'):
-                    _cached_system_type = "VMware Fusion"
-                    print(f"[INFO] 检测到系统类型: {_cached_system_type} (macOS)")
-                    return _cached_system_type
-                    
-            except:
-                pass
-        
-        # 如果都没有检测到，返回DS（物理机）
-        _cached_system_type = system_type
-        print(f"[INFO] 检测到系统类型: {_cached_system_type} (默认)")
+        print(f"[INFO] 最终检测结果: {_cached_system_type}")
         return _cached_system_type
         
     except Exception as e:
-        print(f"[WARN] Failed to detect system type: {e}")
-        _cached_system_type = "未知类型"
+        print(f"[WARN] 系统类型检测失败: {e}")
+        # 即使出错，也尝试Windows检测
+        try:
+            if os.name == 'nt' or 'WINDIR' in os.environ:
+                print(f"[INFO] 异常情况下检测到Windows系统")
+                _cached_system_type = detect_windows_system_type()
+            else:
+                _cached_system_type = "未知类型"
+        except:
+            _cached_system_type = "未知类型"
         return _cached_system_type
+
+def detect_windows_system_type():
+    """检测Windows系统的虚拟化类型"""
+    print("[INFO] 开始Windows系统虚拟化检测...")
+    
+    # 默认为物理机
+    system_type = "DS"
+    
+    try:
+        # 方法1：使用WMI检测（最准确的方法）
+        try:
+            import wmi
+            print("[DEBUG] 使用WMI进行检测...")
+            
+            # 初始化COM接口（避免多线程问题）
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except:
+                pass
+            
+            c = wmi.WMI()
+            
+            # 检查计算机系统信息
+            for computer_system in c.Win32_ComputerSystem():
+                model = computer_system.Model.lower() if computer_system.Model else ""
+                manufacturer = computer_system.Manufacturer.lower() if computer_system.Manufacturer else ""
+                
+                print(f"[DEBUG] WMI Model: '{model}'")
+                print(f"[DEBUG] WMI Manufacturer: '{manufacturer}'")
+                
+                # 检测各种虚拟化平台
+                if 'virtualbox' in model or 'virtualbox' in manufacturer:
+                    system_type = "VirtualBox"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'vmware' in model or 'vmware' in manufacturer:
+                    system_type = "VMware"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'virtual machine' in model or 'microsoft corporation' in manufacturer:
+                    system_type = "Hyper-V"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'parallels' in model or 'parallels' in manufacturer:
+                    system_type = "Parallels"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'qemu' in model or 'qemu' in manufacturer:
+                    system_type = "QEMU"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'bochs' in model or 'bochs' in manufacturer:
+                    system_type = "Bochs"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+                elif 'xen' in model or 'xen' in manufacturer:
+                    system_type = "Xen"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过WMI)")
+                    break
+            
+            # 如果还没有检测到，检查BIOS信息
+            if system_type == "DS":
+                for bios in c.Win32_BIOS():
+                    bios_version = bios.Version.lower() if bios.Version else ""
+                    bios_manufacturer = bios.Manufacturer.lower() if bios.Manufacturer else ""
+                    
+                    print(f"[DEBUG] BIOS Version: '{bios_version}'")
+                    print(f"[DEBUG] BIOS Manufacturer: '{bios_manufacturer}'")
+                    
+                    if 'vmware' in bios_version or 'vmware' in bios_manufacturer:
+                        system_type = "VMware"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
+                        break
+                    elif 'virtualbox' in bios_version or 'innotek' in bios_manufacturer:
+                        system_type = "VirtualBox"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
+                        break
+                    elif 'bochs' in bios_version or 'bochs' in bios_manufacturer:
+                        system_type = "Bochs"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
+                        break
+                    elif 'seabios' in bios_version:
+                        system_type = "KVM"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
+                        break
+            
+            # 清理COM接口
+            try:
+                pythoncom.CoUninitialize()
+            except:
+                pass
+                
+        except ImportError:
+            print("[DEBUG] WMI模块不可用，尝试其他方法...")
+        except Exception as wmi_error:
+            print(f"[DEBUG] WMI检测失败: {wmi_error}")
+    
+        # 方法2：使用systeminfo命令（Windows内置）
+        if system_type == "DS":
+            try:
+                print("[DEBUG] 使用systeminfo命令检测...")
+                result = subprocess.run(['systeminfo'], capture_output=True, text=True, timeout=10, encoding='gbk', errors='ignore')
+                if result.returncode == 0:
+                    systeminfo_output = result.stdout.lower()
+                    
+                    if 'vmware' in systeminfo_output:
+                        system_type = "VMware"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    elif 'virtualbox' in systeminfo_output:
+                        system_type = "VirtualBox"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    elif 'hyper-v' in systeminfo_output or 'microsoft corporation' in systeminfo_output:
+                        system_type = "Hyper-V"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    elif 'qemu' in systeminfo_output:
+                        system_type = "QEMU"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    elif 'bochs' in systeminfo_output:
+                        system_type = "Bochs"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    elif 'xen' in systeminfo_output:
+                        system_type = "Xen"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                else:
+                    print(f"[DEBUG] systeminfo命令失败，返回码: {result.returncode}")
+            except Exception as systeminfo_error:
+                print(f"[DEBUG] systeminfo检测失败: {systeminfo_error}")
+        
+        # 方法3：检查注册表（Windows特有）
+        if system_type == "DS":
+            try:
+                print("[DEBUG] 检查Windows注册表...")
+                import winreg
+                
+                # 检查系统BIOS信息
+                key_path = r"HARDWARE\DESCRIPTION\System\BIOS"
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                    try:
+                        bios_vendor = winreg.QueryValueEx(key, "BIOSVendor")[0].lower()
+                        print(f"[DEBUG] 注册表BIOS厂商: '{bios_vendor}'")
+                        
+                        if 'vmware' in bios_vendor:
+                            system_type = "VMware"
+                            print(f"[INFO] 检测到系统类型: {system_type} (通过注册表)")
+                        elif 'virtualbox' in bios_vendor or 'innotek' in bios_vendor:
+                            system_type = "VirtualBox"
+                            print(f"[INFO] 检测到系统类型: {system_type} (通过注册表)")
+                        elif 'bochs' in bios_vendor:
+                            system_type = "Bochs"
+                            print(f"[INFO] 检测到系统类型: {system_type} (通过注册表)")
+                        elif 'microsoft' in bios_vendor:
+                            system_type = "Hyper-V"
+                            print(f"[INFO] 检测到系统类型: {system_type} (通过注册表)")
+                    except FileNotFoundError:
+                        pass
+                    finally:
+                        winreg.CloseKey(key)
+                except Exception:
+                    pass
+                    
+                # 检查系统信息
+                if system_type == "DS":
+                    key_path = r"HARDWARE\DESCRIPTION\System"
+                    try:
+                        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                        try:
+                            system_identifier = winreg.QueryValueEx(key, "Identifier")[0].lower()
+                            print(f"[DEBUG] 系统标识符: '{system_identifier}'")
+                            
+                            if 'vmware' in system_identifier:
+                                system_type = "VMware"
+                                print(f"[INFO] 检测到系统类型: {system_type} (通过系统标识符)")
+                            elif 'virtualbox' in system_identifier:
+                                system_type = "VirtualBox"
+                                print(f"[INFO] 检测到系统类型: {system_type} (通过系统标识符)")
+                        except FileNotFoundError:
+                            pass
+                        finally:
+                            winreg.CloseKey(key)
+                    except Exception:
+                        pass
+                        
+            except ImportError:
+                print("[DEBUG] winreg模块不可用")
+            except Exception as reg_error:
+                print(f"[DEBUG] 注册表检测失败: {reg_error}")
+        
+        # 方法4：检查Windows服务和驱动程序
+        if system_type == "DS":
+            try:
+                print("[DEBUG] 检查虚拟化服务...")
+                service_result = subprocess.run(['sc', 'query', 'type=', 'driver'], 
+                                              capture_output=True, text=True, timeout=5)
+                if service_result.returncode == 0:
+                    services_output = service_result.stdout.lower()
+                    
+                    if 'vmware' in services_output:
+                        system_type = "VMware"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过服务检查)")
+                    elif 'vbox' in services_output or 'virtualbox' in services_output:
+                        system_type = "VirtualBox"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过服务检查)")
+                    elif 'hvboot' in services_output or 'hypervideo' in services_output:
+                        system_type = "Hyper-V"
+                        print(f"[INFO] 检测到系统类型: {system_type} (通过服务检查)")
+            except Exception as service_error:
+                print(f"[DEBUG] 服务检查失败: {service_error}")
+    
+    except Exception as e:
+        print(f"[WARN] Windows虚拟化检测异常: {e}")
+    
+    # 检测云服务商（通用方法）
+    if system_type == "DS":
+        cloud_type = detect_cloud_provider()
+        if cloud_type:
+            system_type = cloud_type
+    
+    print(f"[INFO] Windows系统检测完成: {system_type}")
+    return system_type
+
+def detect_linux_system_type():
+    """检测Linux系统的虚拟化类型"""
+    
+    # 🔧 安全检查：确保不在Windows系统上执行Linux检测代码
+    if os.name == 'nt' or 'WINDIR' in os.environ or platform.system() == 'Windows':
+        print("[WARN] detect_linux_system_type() 被错误调用在Windows系统上，返回默认值")
+        return "DS"
+    
+    print("[INFO] 开始Linux系统虚拟化检测...")
+    
+    system_type = "DS"  # 默认类型改为DS（物理机）
+    systemd_virt_result = None  # 记录systemd-detect-virt的结果
+    
+    # 最优先：通过systemd-detect-virt命令检测（最权威的方法）
+    try:
+        result = subprocess.run(['systemd-detect-virt'], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            virt_type = result.stdout.strip().lower()
+            systemd_virt_result = virt_type  # 记录结果
+            print(f"[INFO] systemd-detect-virt 结果: '{virt_type}'")
+            
+            if virt_type == 'none':
+                # systemd-detect-virt 明确表示这是物理机，直接返回，不执行任何后续检测
+                system_type = "DS"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过systemd-detect-virt - 物理机，跳过所有其他检测)")
+                return system_type
+            elif virt_type != '':
+                # 检测到虚拟化环境
+                virt_map = {
+                    'kvm': 'KVM',
+                    'qemu': 'QEMU', 
+                    'vmware': 'VMware',
+                    'microsoft': 'Hyper-V',
+                    'xen': 'Xen',
+                    'oracle': 'VirtualBox',
+                    'parallels': 'Parallels',
+                    'lxc': 'LXC',
+                    'docker': 'Docker',
+                    'openvz': 'OpenVZ',
+                    'uml': 'UML',
+                    'bochs': 'Bochs',
+                    'chroot': 'Chroot',
+                    'systemd-nspawn': 'Systemd-nspawn',
+                    'rkt': 'rkt',
+                    'container-other': 'Container',
+                    'qnx': 'QNX',
+                    'acrn': 'ACRN',
+                    'powervm': 'PowerVM',
+                    'bhyve': 'bhyve',
+                    'amazon': 'Amazon',
+                    'podman': 'Podman'
+                }
+                system_type = virt_map.get(virt_type, virt_type.upper())
+                print(f"[INFO] 检测到系统类型: {system_type} (通过systemd-detect-virt)")
+                return system_type
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+        print(f"[INFO] systemd-detect-virt 不可用: {e}")
+        systemd_virt_result = "unavailable"  # 标记为不可用
+        pass
+    
+    # 如果systemd-detect-virt明确返回none，我们应该在上面已经返回了
+    # 这里应该不会执行到，但为了安全起见再检查一次
+    if systemd_virt_result == 'none':
+        print(f"[INFO] systemd-detect-virt 确认为物理机，强制返回DS")
+        system_type = "DS"
+        return system_type
+    
+    # 只有在systemd-detect-virt不可用或结果不明确时，才进行后续检测
+    print(f"[INFO] systemd-detect-virt 结果: {systemd_virt_result}，继续进行其他检测...")
+    
+    # 检测容器环境 - 使用更精确的方法
+    # 1. 检查 /.dockerenv 文件（Docker特有）
+    if os.path.exists('/.dockerenv'):
+        print(f"[DEBUG] 发现 /.dockerenv 文件")
+        system_type = "Docker"
+        print(f"[INFO] 检测到系统类型: {system_type}")
+        return system_type
+    
+    # 2. 检查 /run/.containerenv 文件（Podman特有）
+    if os.path.exists('/run/.containerenv'):
+        print(f"[DEBUG] 发现 /run/.containerenv 文件")
+        system_type = "Podman"
+        print(f"[INFO] 检测到系统类型: {system_type}")
+        return system_type
+    
+    # 3. 精确检查 /proc/1/cgroup 来检测容器
+    try:
+        with open('/proc/1/cgroup', 'r') as f:
+            cgroup_content = f.read()
+            print(f"[DEBUG] /proc/1/cgroup 内容样本: {cgroup_content[:200]}...")
+            
+            # 检查是否在容器的cgroup中（更精确的判断）
+            lines = cgroup_content.strip().split('\n')
+            for line in lines:
+                if ':/docker/' in line or line.endswith('/docker'):
+                    print(f"[DEBUG] 发现Docker cgroup路径: {line}")
+                    system_type = "Docker"
+                    print(f"[INFO] 检测到系统类型: {system_type}")
+                    return system_type
+                elif ':/lxc/' in line or line.endswith('/lxc'):
+                    print(f"[DEBUG] 发现LXC cgroup路径: {line}")
+                    system_type = "LXC"
+                    print(f"[INFO] 检测到系统类型: {system_type}")
+                    return system_type
+                elif '/kubepods/' in line or 'k8s_' in line:
+                    print(f"[DEBUG] 发现Kubernetes cgroup路径: {line}")
+                    system_type = "Kubernetes"
+                    print(f"[INFO] 检测到系统类型: {system_type}")
+                    return system_type
+                elif ':/machine.slice/libpod-' in line or '/libpod-' in line:
+                    print(f"[DEBUG] 发现Podman cgroup路径: {line}")
+                    system_type = "Podman"
+                    print(f"[INFO] 检测到系统类型: {system_type}")
+                    return system_type
+                elif '/containerd/' in line or 'containerd-' in line:
+                    print(f"[DEBUG] 发现Containerd cgroup路径: {line}")
+                    system_type = "Containerd"
+                    print(f"[INFO] 检测到系统类型: {system_type}")
+                    return system_type
+        
+        # 如果没有发现明确的容器路径，但包含容器关键词，需要更谨慎
+        # 避免误判：只有当路径明确指向容器时才判断为容器
+        print(f"[DEBUG] /proc/1/cgroup 检查完成，未发现明确的容器特征")
+        
+    except (FileNotFoundError, PermissionError):
+        print(f"[DEBUG] 无法读取 /proc/1/cgroup")
+        pass
+    
+    # 4. 检查容器环境变量
+    try:
+        container_env_vars = ['CONTAINER', 'container', 'DOCKER_CONTAINER']
+        for var in container_env_vars:
+            if var in os.environ:
+                print(f"[DEBUG] 发现容器环境变量: {var}={os.environ.get(var)}")
+                system_type = "Container"
+                print(f"[INFO] 检测到系统类型: {system_type}")
+                return system_type
+    except:
+        pass
+    
+    # 容器检测完成，继续进行虚拟化检测
+    print(f"[INFO] 容器检测完成，继续进行虚拟化检测...")
+    
+    # 检测虚拟化环境 - 通过DMI信息
+    try:
+        # 检查系统制造商
+        with open('/sys/class/dmi/id/sys_vendor', 'r') as f:
+            vendor = f.read().strip().lower()
+            print(f"[DEBUG] sys_vendor: '{vendor}'")
+            if 'qemu' in vendor:
+                system_type = "QEMU"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'vmware' in vendor:
+                system_type = "VMware"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'microsoft corporation' in vendor:
+                system_type = "Hyper-V"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'xen' in vendor:
+                system_type = "Xen"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'parallels' in vendor:
+                system_type = "Parallels"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'bochs' in vendor:
+                system_type = "Bochs"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'nutanix' in vendor:
+                system_type = "Nutanix AHV"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'red hat' in vendor:
+                system_type = "RHEV"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+            elif 'citrix' in vendor:
+                system_type = "Citrix Xen"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过sys_vendor)")
+                return system_type
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    # 检查产品名称
+    try:
+        with open('/sys/class/dmi/id/product_name', 'r') as f:
+            product = f.read().strip().lower()
+            print(f"[DEBUG] product_name: '{product}'")
+            if 'virtualbox' in product:
+                system_type = "VirtualBox"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'vmware' in product:
+                system_type = "VMware"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'kvm' in product:
+                system_type = "KVM"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'qemu' in product:
+                system_type = "QEMU"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'hyper-v' in product or 'virtual machine' in product:
+                system_type = "Hyper-V"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'bochs' in product:
+                system_type = "Bochs"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'proxmox' in product:
+                system_type = "Proxmox VE"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'openstack' in product:
+                system_type = "OpenStack"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'ovirt' in product:
+                system_type = "oVirt"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'cloudstack' in product:
+                system_type = "CloudStack"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'eucalyptus' in product:
+                system_type = "Eucalyptus"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'bhyve' in product:
+                system_type = "bhyve"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+            elif 'acrn' in product:
+                system_type = "ACRN"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过product_name)")
+                return system_type
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    # 检查BIOS信息
+    try:
+        with open('/sys/class/dmi/id/bios_vendor', 'r') as f:
+            bios_vendor = f.read().strip().lower()
+            print(f"[DEBUG] bios_vendor: '{bios_vendor}'")
+            if 'seabios' in bios_vendor:
+                system_type = "KVM"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过bios_vendor)")
+                return system_type
+            elif 'vmware' in bios_vendor:
+                system_type = "VMware"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过bios_vendor)")
+                return system_type
+            elif 'virtualbox' in bios_vendor:
+                system_type = "VirtualBox"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过bios_vendor)")
+                return system_type
+            elif 'bochs' in bios_vendor:
+                system_type = "Bochs"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过bios_vendor)")
+                return system_type
+            elif 'tianocore' in bios_vendor:
+                system_type = "UEFI VM"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过bios_vendor)")
+                return system_type
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    # 检查CPU型号来推断虚拟化 - 只在DMI检测无结果时使用
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            cpuinfo = f.read().lower()
+            print(f"[DEBUG] 检查 cpuinfo 中的虚拟化标识...")
+            if 'qemu' in cpuinfo:
+                system_type = "QEMU"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'kvm' in cpuinfo:
+                system_type = "KVM"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'vmware' in cpuinfo:
+                system_type = "VMware"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'virtualbox' in cpuinfo:
+                system_type = "VirtualBox"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'xen' in cpuinfo:
+                system_type = "Xen"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'bochs' in cpuinfo:
+                system_type = "Bochs"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+            elif 'bhyve' in cpuinfo:
+                system_type = "bhyve"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过cpuinfo)")
+                return system_type
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    # 检查网络接口名称 - 移除容器相关检测，避免误判
+    # 注意：这里只检测虚拟化平台的接口，不检测容器接口
+    try:
+        interfaces = os.listdir('/sys/class/net/')
+        print(f"[DEBUG] 网络接口: {interfaces}")
+        for iface in interfaces:
+            # 只检测明确的虚拟化平台接口，避免误判
+            if iface.startswith('vmbr'):
+                system_type = "Proxmox VE"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过网络接口)")
+                return system_type
+            # 移除veth和docker接口检查，因为物理机安装Docker后也会有这些接口
+    except:
+        pass
+    
+    # 检查串口号来判断云服务商
+    try:
+        with open('/sys/class/dmi/id/product_serial', 'r') as f:
+            serial = f.read().strip().lower()
+            print(f"[DEBUG] product_serial: '{serial}'")
+            if serial.startswith('ec2'):
+                system_type = "AWS EC2"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过序列号)")
+                return system_type
+            elif 'google' in serial:
+                system_type = "GCP VM"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过序列号)")
+                return system_type
+            elif 'vmware' in serial:
+                system_type = "VMware"
+                print(f"[INFO] 检测到系统类型: {system_type} (通过序列号)")
+                return system_type
+    except (FileNotFoundError, PermissionError):
+        pass
+    
+    # 检测云服务商（通用方法）
+    if system_type == "DS":
+        cloud_type = detect_cloud_provider()
+        if cloud_type:
+            system_type = cloud_type
+    
+    print(f"[INFO] Linux系统检测完成: {system_type}")
+    return system_type
+
+def detect_cloud_provider():
+    """检测云服务商（使用更短的超时时间）"""
+    try:
+        # AWS检测
+        response = requests.get('http://169.254.169.254/latest/meta-data/instance-id', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: AWS EC2")
+            return "AWS EC2"
+    except:
+        pass
+    
+    try:
+        # Azure检测
+        headers = {'Metadata': 'true'}
+        response = requests.get('http://169.254.169.254/metadata/instance?api-version=2021-02-01', 
+                              headers=headers, timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: Azure VM")
+            return "Azure VM"
+    except:
+        pass
+    
+    try:
+        # GCP检测
+        headers = {'Metadata-Flavor': 'Google'}
+        response = requests.get('http://metadata.google.internal/computeMetadata/v1/instance/id', 
+                              headers=headers, timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: GCP VM")
+            return "GCP VM"
+    except:
+        pass
+    
+    try:
+        # 阿里云检测
+        response = requests.get('http://100.100.100.200/latest/meta-data/instance-id', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: 阿里云ECS")
+            return "阿里云ECS"
+    except:
+        pass
+    
+    try:
+        # 腾讯云检测
+        response = requests.get('http://metadata.tencentcloudapi.com/latest/meta-data/instance-id', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: 腾讯云CVM")
+            return "腾讯云CVM"
+    except:
+        pass
+    
+    try:
+        # 华为云检测
+        response = requests.get('http://169.254.169.254/openstack/latest/meta_data.json', 
+                              timeout=1)
+        if response.status_code == 200:
+            data = response.json()
+            if 'availability_zone' in data and 'huawei' in str(data).lower():
+                print(f"[INFO] 检测到云服务商: 华为云ECS")
+                return "华为云ECS"
+    except:
+        pass
+    
+    try:
+        # Oracle Cloud检测
+        headers = {'Authorization': 'Bearer Oracle'}
+        response = requests.get('http://169.254.169.254/opc/v1/instance/', 
+                              headers=headers, timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: Oracle Cloud")
+            return "Oracle Cloud"
+    except:
+        pass
+    
+    try:
+        # DigitalOcean检测
+        response = requests.get('http://169.254.169.254/metadata/v1/id', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: DigitalOcean")
+            return "DigitalOcean"
+    except:
+        pass
+    
+    try:
+        # Linode检测
+        response = requests.get('http://169.254.169.254/linode/v1/instance', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: Linode")
+            return "Linode"
+    except:
+        pass
+    
+    try:
+        # Vultr检测
+        response = requests.get('http://169.254.169.254/v1/instanceid', 
+                              timeout=1)
+        if response.status_code == 200:
+            print(f"[INFO] 检测到云服务商: Vultr")
+            return "Vultr"
+    except:
+        pass
+    
+    return None
+
+def detect_macos_system_type():
+    """检测macOS系统的虚拟化类型"""
+    print("[INFO] 开始macOS系统虚拟化检测...")
+    
+    system_type = "DS"  # 默认为物理机
+    
+    try:
+        # 检查是否为虚拟机
+        result = subprocess.run(['sysctl', '-n', 'machdep.cpu.features'], 
+                              capture_output=True, text=True, timeout=3)
+        if result.returncode == 0:
+            features = result.stdout.lower()
+            if 'hypervisor' in features:
+                system_type = "macOS VM"
+                print(f"[INFO] 检测到系统类型: {system_type} (macOS sysctl)")
+                return system_type
+        
+        # 检查Parallels
+        if os.path.exists('/Applications/Parallels Desktop.app'):
+            system_type = "Parallels"
+            print(f"[INFO] 检测到系统类型: {system_type} (macOS)")
+            return system_type
+        
+        # 检查VMware Fusion
+        if os.path.exists('/Applications/VMware Fusion.app'):
+            system_type = "VMware Fusion"
+            print(f"[INFO] 检测到系统类型: {system_type} (macOS)")
+            return system_type
+            
+    except Exception as e:
+        print(f"[DEBUG] macOS检测异常: {e}")
+    
+    # 检测云服务商（通用方法）
+    if system_type == "DS":
+        cloud_type = detect_cloud_provider()
+        if cloud_type:
+            system_type = cloud_type
+    
+    print(f"[INFO] macOS系统检测完成: {system_type}")
+    return system_type
 
 def get_all_disk_usage():
     """获取所有挂载分区的磁盘使用情况总和"""
