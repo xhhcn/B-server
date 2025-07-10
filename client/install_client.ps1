@@ -2,13 +2,23 @@
 # 使用方法: 
 # 方法1(推荐): powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '192.168.1.100' -NodeName 'MyServer'"
 # 方法2: .\install_client.ps1 -ServerIP "192.168.1.100" -NodeName "MyServer"
+#
+# 特殊字符处理:
+# 如果NodeName包含$符号，请使用以下方式之一：
+# 1. 转义$符号：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeName 'Layer(`$29.9/Y)'"
+# 2. 使用Base64编码：powershell -ExecutionPolicy Bypass -Command "iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '51.81.222.49' -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
+# 3. 下载脚本后本地运行：iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -OutFile install_client.ps1; .\install_client.ps1 -ServerIP "51.81.222.49" -NodeName "Layer(`$29.9/Y)"
+# 4. 生成Base64编码：[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('Layer($29.9/Y)'))
 
 param(
     [Parameter(Mandatory=$false)]
     [string]$ServerIP,
     
     [Parameter(Mandatory=$false)]
-    [string]$NodeName = $env:COMPUTERNAME
+    [string]$NodeName = $env:COMPUTERNAME,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$NodeNameBase64
 )
 
 # 设置控制台编码为UTF-8
@@ -41,9 +51,24 @@ function Install-BServerClient {
         [string]$ServerIP,
         
         [Parameter(Mandatory=$false)]
-        [string]$NodeName = $env:COMPUTERNAME
+        [string]$NodeName = $env:COMPUTERNAME,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$NodeNameBase64
     )
 
+    # 处理Base64编码的节点名称
+    if (-not [string]::IsNullOrWhiteSpace($NodeNameBase64)) {
+        try {
+            $NodeName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($NodeNameBase64))
+            Write-ColorOutput "[INFO] Decoded NodeName from Base64: '$NodeName'" "Blue"
+        }
+        catch {
+            Write-ColorOutput "[ERROR] Failed to decode NodeNameBase64: $($_.Exception.Message)" "Red"
+            exit 1
+        }
+    }
+    
     # 验证参数
     if ([string]::IsNullOrWhiteSpace($ServerIP)) {
         Write-ColorOutput "[ERROR] ServerIP parameter is null or empty" "Red"
@@ -55,17 +80,29 @@ function Install-BServerClient {
     }
 
     Write-ColorOutput "[INFO] Starting B-Server client installation..." "Blue"
-    Write-ColorOutput "[INFO] Server address: ${ServerIP}:8008" "Blue"
-    Write-ColorOutput "[INFO] Node name: ${NodeName}" "Blue"
-    Write-ColorOutput "[DEBUG] Raw ServerIP: '${ServerIP}'" "Yellow"
-    Write-ColorOutput "[DEBUG] Raw NodeName: '${NodeName}'" "Yellow"
+    Write-ColorOutput ("[INFO] Server address: " + $ServerIP + ":8008") "Blue"
+    Write-ColorOutput ("[INFO] Node name: " + $NodeName) "Blue"
+    Write-ColorOutput ("[DEBUG] Raw ServerIP: '" + $ServerIP + "'") "Yellow"
+    Write-ColorOutput ("[DEBUG] Raw NodeName: '" + $NodeName + "'") "Yellow"
+    
+    # 检查节点名称是否包含特殊字符并提供建议
+    if ($NodeName -match '[$(){}[\]^|&<>]') {
+        Write-ColorOutput "[WARNING] Node name contains special characters that may cause issues!" "Yellow"
+        $base64NodeName = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($NodeName))
+        Write-ColorOutput "[SUGGESTION] For better compatibility, use Base64 encoding:" "Yellow"
+        Write-ColorOutput "[SUGGESTION] -NodeNameBase64 '$base64NodeName'" "Yellow"
+        Write-ColorOutput "[SUGGESTION] Complete command:" "Yellow"
+        $suggestedCommand = 'powershell -ExecutionPolicy Bypass -Command "iwr -Uri ''https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1'' -UseBasicParsing | iex; Install-BServerClient -ServerIP ''' + $ServerIP + ''' -NodeNameBase64 ''' + $base64NodeName + '''"'
+        Write-ColorOutput $suggestedCommand "Cyan"
+        Write-Host ""
+    }
 
     # Configuration variables
     $ClientDir = Join-Path $env:USERPROFILE "b-server-client"
     $ClientFile = Join-Path $ClientDir "client.py"
     $ClientURL = "https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/client.py"
 
-    Write-ColorOutput "[INFO] Installation directory: $ClientDir" "Blue"
+    Write-ColorOutput ("[INFO] Installation directory: " + $ClientDir) "Blue"
 
     # Check system dependencies
     Write-ColorOutput "[INFO] Checking system dependencies..." "Blue"
@@ -146,10 +183,10 @@ function Install-BServerClient {
         $expectedNodeName = 'NODE_NAME = ''' + $NodeName + ''''
         $nodeNameFound = $verifyContent.Contains($expectedNodeName)
         
-        Write-ColorOutput "[DEBUG] Expected Server URL: $expectedServerUrl" "Yellow"
-        Write-ColorOutput "[DEBUG] Server URL found: $serverUrlFound" "Yellow"
-        Write-ColorOutput "[DEBUG] Expected Node Name: $expectedNodeName" "Yellow"
-        Write-ColorOutput "[DEBUG] Node Name found: $nodeNameFound" "Yellow"
+        Write-ColorOutput ("[DEBUG] Expected Server URL: " + $expectedServerUrl) "Yellow"
+        Write-ColorOutput ("[DEBUG] Server URL found: " + $serverUrlFound) "Yellow"
+        Write-ColorOutput ("[DEBUG] Expected Node Name: " + $expectedNodeName) "Yellow"
+        Write-ColorOutput ("[DEBUG] Node Name found: " + $nodeNameFound) "Yellow"
         
         # 额外验证：显示实际的节点名称长度和内容
         Write-ColorOutput ("[DEBUG] Node Name length: " + $NodeName.Length) "Yellow"
@@ -530,7 +567,7 @@ print('[SUCCESS] Client configuration test passed')
     Write-ColorOutput "[SUCCESS] B-Server Client installation completed successfully!" "Green"
     Write-ColorOutput "" "White"
     Write-ColorOutput "Installation Information:" "Blue"
-    Write-Host "  Installation Directory: $ClientDir"
+    Write-Host ("  Installation Directory: " + $ClientDir)
     Write-Host ("  Server Address: " + $ServerIP + ":8008")
     Write-Host ("  Node Name: " + $NodeName)
     Write-Host ""
@@ -571,19 +608,30 @@ print('[SUCCESS] Client configuration test passed')
 # 只有在直接运行脚本文件（而不是通过iex执行）时才检查参数
 if ($MyInvocation.InvocationName -match '\.ps1$') {
     # 这是直接运行脚本文件的情况
-    if (-not $ServerIP -or -not $NodeName) {
+    if (-not $ServerIP -or (-not $NodeName -and -not $NodeNameBase64)) {
         Write-ColorOutput "[ERROR] Missing required parameters" "Red"
         Write-ColorOutput "[INFO] Usage:" "Blue"
         Write-Host "  Local run: .\install_client.ps1 -ServerIP '<ServerIP>' -NodeName '<NodeName>'"
+        Write-Host "  Local run (Base64): .\install_client.ps1 -ServerIP '<ServerIP>' -NodeNameBase64 '<Base64EncodedNodeName>'"
         Write-Host "  One-click: powershell -ExecutionPolicy Bypass -Command `"iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '<ServerIP>' -NodeName '<NodeName>'`""
         Write-Host ""
         Write-ColorOutput "[INFO] Examples:" "Blue"
         Write-Host "  .\install_client.ps1 -ServerIP '192.168.1.100' -NodeName 'MyServer'"
-        Write-Host "  powershell -ExecutionPolicy Bypass -Command `"iwr -Uri 'https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.ps1' -UseBasicParsing | iex; Install-BServerClient -ServerIP '192.168.1.100' -NodeName 'MyServer'`""
+        Write-Host "  .\install_client.ps1 -ServerIP '192.168.1.100' -NodeName 'Layer(`$29.9/Y)'"
+        Write-Host "  .\install_client.ps1 -ServerIP '192.168.1.100' -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
+        Write-Host ""
+        Write-ColorOutput "[INFO] For special characters in NodeName, use one of these methods:" "Yellow"
+        Write-Host "  1. Escape `$ with backtick: 'Layer(`$29.9/Y)'"
+        Write-Host "  2. Use Base64 encoding: -NodeNameBase64 'TGF5ZXIoJDI5LjkvWSk='"
+        Write-Host "  3. Download script first, then run locally"
         exit 1
     } else {
         # 直接运行脚本且参数正确，调用安装函数
-        Install-BServerClient -ServerIP $ServerIP -NodeName $NodeName
+        if ($NodeNameBase64) {
+            Install-BServerClient -ServerIP $ServerIP -NodeNameBase64 $NodeNameBase64
+        } else {
+            Install-BServerClient -ServerIP $ServerIP -NodeName $NodeName
+        }
     }
 }
 
