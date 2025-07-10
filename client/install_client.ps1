@@ -398,7 +398,7 @@ echo.
 '@) -f $ServerIP, $NodeName
     Set-Content -Path "start_background.bat" -Value $startBackgroundScript -Encoding UTF8
 
-    # 停止脚本 - 修复版本，使用简单直接的方法
+    # 停止脚本 - 修复版本，使用标准ASCII字符确保兼容性
     $stopScript = @"
 @echo off
 echo ==========================================
@@ -411,17 +411,17 @@ echo [1] Stopping B-Server Client processes...
 echo    - Attempting to stop python.exe processes...
 taskkill /f /im python.exe >nul 2>&1
 if %errorlevel%==0 (
-    echo      ✓ python.exe processes stopped
+    echo      [OK] python.exe processes stopped
 ) else (
-    echo      ○ No python.exe processes found
+    echo      [INFO] No python.exe processes found
 )
 
 echo    - Attempting to stop pythonw.exe processes...
 taskkill /f /im pythonw.exe >nul 2>&1
 if %errorlevel%==0 (
-    echo      ✓ pythonw.exe processes stopped
+    echo      [OK] pythonw.exe processes stopped
 ) else (
-    echo      ○ No pythonw.exe processes found
+    echo      [INFO] No pythonw.exe processes found
 )
 
 echo.
@@ -429,28 +429,28 @@ echo [2] Verifying processes are stopped...
 
 tasklist /fi "IMAGENAME eq python.exe" 2>nul | find "python.exe" >nul
 if %errorlevel%==0 (
-    echo    ⚠ WARNING: Some python.exe processes are still running
+    echo    [WARNING] Some python.exe processes are still running
     echo    Active python.exe processes:
     tasklist /fi "IMAGENAME eq python.exe" 2>nul
 ) else (
-    echo    ✓ No python.exe processes found
+    echo    [OK] No python.exe processes found
 )
 
 tasklist /fi "IMAGENAME eq pythonw.exe" 2>nul | find "pythonw.exe" >nul
 if %errorlevel%==0 (
-    echo    ⚠ WARNING: Some pythonw.exe processes are still running
+    echo    [WARNING] Some pythonw.exe processes are still running
     echo    Active pythonw.exe processes:
     tasklist /fi "IMAGENAME eq pythonw.exe" 2>nul
 ) else (
-    echo    ✓ No pythonw.exe processes found
+    echo    [OK] No pythonw.exe processes found
 )
 
 echo.
 echo [3] Additional stop methods:
 echo    If processes are still running, try these commands manually:
-echo    • taskkill /f /im python.exe
-echo    • taskkill /f /im pythonw.exe
-echo    • Use Task Manager to end processes manually
+echo    - taskkill /f /im python.exe
+echo    - taskkill /f /im pythonw.exe
+echo    - Use Task Manager to end processes manually
 
 echo.
 echo ==========================================
@@ -807,11 +807,11 @@ Write-Host "4. Run: .\nssm.exe start `$serviceName"
     Write-Host "  Fix SSL issues:      fix_ssl.bat"
     Write-Host ""
     Write-ColorOutput "Important Notes:" "Yellow"
-    Write-Host "  • On Windows, TCPing uses Python implementation to avoid CMD popups"
-    Write-Host "  • Client will run silently in background when using start_background.bat"
-    Write-Host ("  • Ensure the node '" + $NodeName + "' is added in the admin panel")
-    Write-Host "  • Check firewall allows outbound connections to port 8008"
-    Write-Host "  • If you encountered SSL certificate errors during installation, run fix_ssl.bat"
+    Write-Host "  - On Windows, TCPing uses Python implementation to avoid CMD popups"
+    Write-Host "  - Client will run silently in background when using start_background.bat"
+    Write-Host ("  - Ensure the node '" + $NodeName + "' is added in the admin panel")
+    Write-Host "  - Check firewall allows outbound connections to port 8008"
+    Write-Host "  - If you encountered SSL certificate errors during installation, run fix_ssl.bat"
     Write-Host ""
     
     # Ask whether to start immediately
