@@ -151,6 +151,11 @@ function Install-BServerClient {
         Write-ColorOutput "[DEBUG] Expected Node Name: $expectedNodeName" "Yellow"
         Write-ColorOutput "[DEBUG] Node Name found: $nodeNameFound" "Yellow"
         
+        # 额外验证：显示实际的节点名称长度和内容
+        Write-ColorOutput ("[DEBUG] Node Name length: " + $NodeName.Length) "Yellow"
+        Write-ColorOutput ("[DEBUG] Node Name bytes: " + [System.Text.Encoding]::UTF8.GetBytes($NodeName).Length) "Yellow"
+        Write-ColorOutput ("[DEBUG] Node Name contains $: " + $NodeName.Contains('$')) "Yellow"
+        
         if ($serverUrlFound -and $nodeNameFound) {
             Write-ColorOutput "[SUCCESS] Client configuration modified successfully" "Green"
             Write-ColorOutput ("[INFO] Server URL: http://" + $ServerIP + ":8008") "Blue"
@@ -217,7 +222,7 @@ function Install-BServerClient {
     Write-ColorOutput "[INFO] Creating management scripts..." "Blue"
     
     # 启动脚本 - 使用占位符避免变量展开问题
-    $startScript = @'
+    $startScript = (@'
 @echo off
 cd /d "%~dp0"
 echo Starting B-Server Client...
@@ -235,11 +240,11 @@ if errorlevel 1 (
     echo.
 )
 pause
-'@ -f $ServerIP, $NodeName
+'@) -f $ServerIP, $NodeName
     Set-Content -Path "start.bat" -Value $startScript -Encoding UTF8
 
     # 后台启动脚本 - 使用占位符避免变量展开问题
-    $startBackgroundScript = @'
+    $startBackgroundScript = (@'
 @echo off
 cd /d "%~dp0"
 echo Starting B-Server Client in background...
@@ -266,7 +271,7 @@ if %errorlevel%==0 (
     echo Try running start.bat to see detailed error messages
 )
 echo.
-'@ -f $ServerIP, $NodeName
+'@) -f $ServerIP, $NodeName
     Set-Content -Path "start_background.bat" -Value $startBackgroundScript -Encoding UTF8
 
     # 停止脚本 - 修复版本，使用简单直接的方法
@@ -332,7 +337,7 @@ pause
     Set-Content -Path "stop.bat" -Value $stopScript -Encoding UTF8
 
     # 状态检查脚本 - 使用占位符避免变量展开问题
-    $statusScript = @'
+    $statusScript = (@'
 @echo off
 echo ========================================
 echo B-Server Client Status Check
@@ -366,11 +371,11 @@ if %errorlevel%==0 (
 )
 echo.
 pause
-'@ -f $ServerIP, $NodeName
+'@) -f $ServerIP, $NodeName
     Set-Content -Path "status.bat" -Value $statusScript -Encoding UTF8
 
     # 调试脚本 - 使用占位符避免变量展开问题
-    $debugScript = @'
+    $debugScript = (@'
 @echo off
 cd /d "%~dp0"
 echo ========================================
@@ -420,11 +425,11 @@ venv\Scripts\python.exe client.py
 
 :end
 pause
-'@ -f $ServerIP, $NodeName
+'@) -f $ServerIP, $NodeName
     Set-Content -Path "debug.bat" -Value $debugScript -Encoding UTF8
 
     # 更新脚本 - 使用占位符避免变量展开问题
-    $updateScript = @'
+    $updateScript = (@'
 @echo off
 cd /d "%~dp0"
 echo Stopping client...
@@ -445,7 +450,7 @@ if exist client.py.new (
     echo Download failed
 )
 pause
-'@ -f $ClientURL, $ServerIP, $NodeName
+'@) -f $ClientURL, $ServerIP, $NodeName
     Set-Content -Path "update.bat" -Value $updateScript -Encoding UTF8
 
     Write-ColorOutput "[SUCCESS] Management scripts created successfully" "Green"
@@ -477,7 +482,7 @@ Write-Host "4. Run: .\nssm.exe start `$serviceName"
     Write-ColorOutput "[INFO] Testing client configuration..." "Blue"
     try {
         # Create test script dynamically to avoid variable interpolation issues
-        $testContent = @'
+        $testContent = (@'
 import sys, os
 sys.path.insert(0, os.getcwd())
 try:
@@ -503,7 +508,7 @@ with open('client.py', 'r', encoding='utf-8') as f:
         sys.exit(1)
 
 print('[SUCCESS] Client configuration test passed')
-'@ -f $ServerIP, $NodeName
+'@) -f $ServerIP, $NodeName
 
         $testResult = & ".\venv\Scripts\python.exe" -c $testContent
 
