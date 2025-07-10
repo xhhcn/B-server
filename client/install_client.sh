@@ -329,41 +329,112 @@ echo "开始卸载..."
 
 # 停止服务
 echo "停止客户端服务..."
-if [ -f "./stop.sh" ]; then
+if [ -f "./stop_simple.sh" ]; then
+    ./stop_simple.sh
+elif [ -f "./stop.sh" ]; then
     ./stop.sh
 else
-    echo "stop.sh不存在，跳过..."
+    echo "停止脚本不存在，尝试手动停止..."
+    # 手动停止进程
+    if [ -f "client.pid" ]; then
+        PID=$(cat client.pid)
+        if ps -p $PID > /dev/null 2>&1; then
+            kill $PID && echo "已停止进程 PID: $PID"
+        fi
+        rm -f client.pid
+    fi
+    pkill -f "python3.*client.py" || true
+fi
+
+# 移除systemd服务
+echo "检查并移除systemd服务..."
+if command -v systemctl &> /dev/null; then
+    SERVICE_NAME="b-server-client.service"
+    SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
+    
+    # 检查服务是否存在
+    if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
+        echo "发现systemd服务，正在移除..."
+        
+        # 停止并禁用服务
+        sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+        sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+        
+        # 删除服务文件
+        if [ -f "$SERVICE_FILE" ]; then
+            sudo rm -f "$SERVICE_FILE"
+            echo "✅ systemd服务文件已删除"
+        fi
+        
+        # 重新加载systemd
+        sudo systemctl daemon-reload 2>/dev/null || true
+        echo "✅ systemd服务已完全移除"
+    else
+        echo "未找到systemd服务"
+    fi
+else
+    echo "系统不支持systemd，跳过服务移除"
+fi
+
+# 移除rc.local启动项
+echo "检查并移除rc.local启动项..."
+CLIENT_DIR="$(pwd)"
+if [ -f "/etc/rc.local" ] && grep -q "$CLIENT_DIR" /etc/rc.local; then
+    echo "发现rc.local启动项，正在移除..."
+    # 备份rc.local
+    sudo cp /etc/rc.local /etc/rc.local.backup.uninstall.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+    
+    # 移除B-Server相关的启动项
+    sudo sed -i '/# B-Server Client Auto Start/,+1d' /etc/rc.local 2>/dev/null || true
+    sudo sed -i "\\|$CLIENT_DIR|d" /etc/rc.local 2>/dev/null || true
+    echo "✅ rc.local启动项已移除"
+else
+    echo "未找到rc.local启动项"
 fi
 
 # 移除cron任务
-echo "移除开机自启动..."
-CLIENT_DIR="$(pwd)"
-if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR/start.sh"; then
+echo "检查并移除cron任务..."
+if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR"; then
+    echo "发现cron任务，正在移除..."
     # 创建临时cron文件
     TEMP_CRON=$(mktemp)
     
     # 获取现有cron任务并过滤掉B-Server相关的任务
-    crontab -l 2>/dev/null | grep -v "$CLIENT_DIR/start.sh" > "$TEMP_CRON"
+    crontab -l 2>/dev/null | grep -v "$CLIENT_DIR" > "$TEMP_CRON"
     
     # 安装新的crontab
     if crontab "$TEMP_CRON"; then
-        echo "✅ 开机自启动已移除"
+        echo "✅ cron任务已移除"
     else
-        echo "❌ 移除开机自启动失败，请手动执行: crontab -e"
+        echo "❌ 移除cron任务失败，请手动执行: crontab -e"
     fi
     
     # 清理临时文件
     rm -f "$TEMP_CRON"
 else
-    echo "未找到开机自启动任务"
+    echo "未找到cron任务"
 fi
+
+# 显示清理摘要
+echo ""
+echo "=== 卸载摘要 ==="
+echo "已尝试移除："
+echo "  ✓ 客户端进程"
+echo "  ✓ systemd服务 (如果存在)"
+echo "  ✓ rc.local启动项 (如果存在)"
+echo "  ✓ cron任务 (如果存在)"
+echo ""
 
 # 移除整个客户端目录
 echo "移除客户端文件..."
-cd ..
+PARENT_DIR="$(dirname "$CLIENT_DIR")"
+cd "$PARENT_DIR"
 rm -rf "$CLIENT_DIR"
 
 echo "✅ B-Server客户端卸载完成"
+echo ""
+echo "如需重新安装，请重新运行安装脚本："
+echo "curl -fsSL https://raw.githubusercontent.com/xhhcn/B-server/refs/heads/main/client/install_client.sh | bash -s <SERVER_IP> [NODE_NAME]"
 EOF
 
 # 创建更新脚本
