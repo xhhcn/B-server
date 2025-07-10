@@ -158,13 +158,32 @@ cat > "$CLIENT_DIR/status.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 
-echo "=== B-Server客户端状态 ==="
+echo "=== B-Server客户端状态检查 ==="
 echo ""
+
+# 检查停止标记文件
+if [ -f ".stopped" ]; then
+    echo "⚠️  发现停止标记文件"
+    echo "客户端已被手动停止，不应该自动重启"
+    echo ""
+    echo "停止标记内容:"
+    cat ".stopped"
+    echo ""
+    echo "如需重新启动:"
+    echo "• 删除停止标记并启动: rm -f .stopped && ./run_client.sh"
+    echo "• 或直接运行启动脚本: ./run_client.sh"
+    echo ""
+fi
 
 # 检查客户端是否运行
 if [ ! -f client.pid ]; then
     echo "❌ 客户端未运行（无PID文件）"
-    echo "   使用 ./run_client.sh 启动服务"
+    if [ -f ".stopped" ]; then
+        echo "   客户端处于停止状态"
+        echo "   如需启动: ./run_client.sh"
+    else
+        echo "   使用 ./run_client.sh 启动服务"
+    fi
     echo ""
     echo "=== 管理命令 ==="
     echo "启动服务: ./run_client.sh"
@@ -177,7 +196,12 @@ if ! ps -p $PID > /dev/null 2>&1; then
     echo "❌ PID文件存在但进程未运行 (PID: $PID)"
     echo "   清理PID文件并重新启动..."
     rm -f client.pid
-    echo "   使用 ./run_client.sh 启动服务"
+    if [ -f ".stopped" ]; then
+        echo "   发现停止标记文件，可能是手动停止的"
+        echo "   如需启动: ./run_client.sh"
+    else
+        echo "   使用 ./run_client.sh 启动服务"
+    fi
     echo ""
     echo "=== 管理命令 ==="
     echo "启动服务: ./run_client.sh"
@@ -198,58 +222,82 @@ echo "工作目录: $(pwd)"
 echo "PID文件: client.pid"
 echo "日志文件: client.log"
 
+# 检查自动启动机制
+echo ""
+echo "=== 自动启动机制 ==="
+autostart_found=false
+
+# 检查systemd服务
+if command -v systemctl &> /dev/null; then
+    if systemctl is-enabled --quiet "b-server-client.service" 2>/dev/null; then
+        echo "✅ systemd服务已启用"
+        if systemctl is-active --quiet "b-server-client.service" 2>/dev/null; then
+            echo "   服务状态: 运行中"
+        else
+            echo "   服务状态: 已停止"
+        fi
+        autostart_found=true
+    fi
+fi
+
+# 检查rc.local
+if [ -f "/etc/rc.local" ] && grep -q "$(pwd)" /etc/rc.local; then
+    echo "✅ rc.local启动项已设置"
+    autostart_found=true
+fi
+
+# 检查cron任务
+if crontab -l 2>/dev/null | grep -q "$(pwd)"; then
+    echo "✅ cron任务已设置"
+    autostart_found=true
+fi
+
+if [ "$autostart_found" = false ]; then
+    echo "⚠️  未找到自动启动机制"
+    echo "   客户端不会在重启后自动启动"
+    echo "   运行 ./fix_autostart.sh 设置自动启动"
+fi
+
 echo ""
 echo "=== 管理命令 ==="
 echo "查看日志: ./logs.sh"
 echo "停止服务: ./stop_simple.sh"
 echo "重启服务: ./restart.sh"
 echo "更新客户端: ./update.sh"
+echo "修复自动启动: ./fix_autostart.sh"
 EOF
 
-# 创建停止脚本（兼容性重定向）
-cat > "$CLIENT_DIR/stop.sh" << 'EOF'
-#!/bin/bash
-cd "$(dirname "$0")"
-
-echo "B-Server客户端停止脚本 - 重定向到新的停止方式"
-echo "使用新的停止脚本: ./stop_simple.sh"
-echo ""
-
-# 调用新的停止脚本
-./stop_simple.sh
-EOF
-
-# 创建重启脚本
+# 创建重启脚本（使用新的停止脚本）
 cat > "$CLIENT_DIR/restart.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 
-echo "重启B-Server客户端..."
+echo "=== 重启B-Server客户端 ==="
+echo ""
 
-# 先停止现有进程
-echo "停止现有进程..."
+echo "[1] 停止现有进程..."
 ./stop_simple.sh
 
-# 等待完全停止
-sleep 2
+echo ""
+echo "[2] 等待完全停止..."
+sleep 3
 
-# 启动新进程
-echo "启动新进程..."
-if ./run_client.sh; then
-    sleep 2
-    if [ -f "client.pid" ] && ps -p $(cat client.pid) > /dev/null 2>&1; then
-        PID=$(cat client.pid)
-        echo "✅ B-Server客户端重启成功！(PID: $PID)"
-        echo "查看状态: ./status.sh"
-        echo "查看日志: ./logs.sh"
-    else
-        echo "❌ B-Server客户端重启失败，请检查日志"
-        exit 1
-    fi
-else
-    echo "❌ B-Server客户端启动失败"
-    exit 1
-fi
+echo ""
+echo "[3] 启动新进程..."
+./run_client.sh
+EOF
+
+# 创建启动脚本（兼容性重定向）
+cat > "$CLIENT_DIR/start.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+
+echo "B-Server客户端启动脚本 - 重定向到新的启动方式"
+echo "使用新的启动脚本: ./run_client.sh"
+echo ""
+
+# 调用新的启动脚本
+./run_client.sh
 EOF
 
 # 创建日志查看脚本
@@ -736,19 +784,88 @@ log_success "管理脚本创建完成"
 # 设置开机自启动（优先使用systemd，备选rc.local）
 log_info "设置开机自启动..."
 
-# 创建简单的启动脚本（直接运行Python客户端，不使用supervisor）
+# 创建智能启动脚本（检查停止标记文件）
 cat > "$CLIENT_DIR/run_client.sh" << 'RUN_EOF'
 #!/bin/bash
 
-# B-Server 客户端简单启动脚本
+# B-Server 客户端智能启动脚本
 CLIENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$CLIENT_DIR"
 
+echo "=== B-Server客户端启动脚本 ==="
+echo ""
+
+# 检查停止标记文件
+if [ -f "$CLIENT_DIR/.stopped" ]; then
+    echo "⚠️  发现停止标记文件"
+    echo "客户端之前已被手动停止，可能不应该自动重启"
+    echo ""
+    echo "停止标记内容:"
+    cat "$CLIENT_DIR/.stopped"
+    echo ""
+    echo "如果您确实想要启动客户端，请选择："
+    echo "1. 删除停止标记并启动 (推荐)"
+    echo "2. 忽略停止标记并强制启动"
+    echo "3. 取消启动"
+    echo ""
+    
+    # 如果是自动启动（非交互环境），则直接退出
+    if [ ! -t 0 ]; then
+        echo "🔍 检测到非交互环境（自动启动），遵循停止标记，不启动客户端"
+        echo "如需启动，请手动运行: rm -f .stopped && ./run_client.sh"
+        exit 0
+    fi
+    
+    read -p "请选择 (1/2/3): " choice
+    case $choice in
+        1)
+            rm -f "$CLIENT_DIR/.stopped"
+            echo "✅ 已删除停止标记，继续启动..."
+            ;;
+        2)
+            echo "⚠️  强制启动，保留停止标记..."
+            ;;
+        3)
+            echo "❌ 取消启动"
+            exit 0
+            ;;
+        *)
+            echo "❌ 无效选择，取消启动"
+            exit 0
+            ;;
+    esac
+    echo ""
+fi
+
+# 检查是否已经在运行
+if [ -f "client.pid" ]; then
+    PID=$(cat client.pid)
+    if ps -p $PID > /dev/null 2>&1; then
+        echo "⚠️  客户端已经在运行 (PID: $PID)"
+        echo "如需重启，请先运行: ./stop_simple.sh"
+        exit 1
+    else
+        echo "🔍 发现僵尸PID文件，清理中..."
+        rm -f client.pid
+    fi
+fi
+
+echo "[1] 准备启动环境..."
+
 # 激活虚拟环境
-source venv/bin/activate
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+    echo "✅ 虚拟环境已激活"
+else
+    echo "⚠️  未找到虚拟环境，使用系统Python"
+fi
 
 # 设置日志文件
 LOG_FILE="$CLIENT_DIR/client.log"
+echo "✅ 日志文件: $LOG_FILE"
+
+echo ""
+echo "[2] 启动客户端进程..."
 
 # 记录启动时间
 echo "$(date): Starting B-Server Client..." >> "$LOG_FILE"
@@ -761,38 +878,119 @@ CLIENT_PID=$!
 echo $CLIENT_PID > "$CLIENT_DIR/client.pid"
 
 echo "$(date): B-Server Client started with PID: $CLIENT_PID" >> "$LOG_FILE"
-echo "B-Server Client started with PID: $CLIENT_PID"
+
+# 验证进程是否成功启动
+sleep 2
+if ps -p $CLIENT_PID > /dev/null 2>&1; then
+    echo "✅ B-Server客户端启动成功 (PID: $CLIENT_PID)"
+    echo ""
+    echo "管理命令:"
+    echo "• 查看状态: ./status.sh"
+    echo "• 查看日志: tail -f client.log"
+    echo "• 停止客户端: ./stop_simple.sh"
+    echo "• 重启客户端: ./restart.sh"
+else
+    echo "❌ 客户端启动失败"
+    echo "请检查日志文件: $LOG_FILE"
+    rm -f client.pid
+    exit 1
+fi
 RUN_EOF
 
 chmod +x "$CLIENT_DIR/run_client.sh"
 
-# 创建停止脚本（简化版）
+# 创建统一的停止脚本（彻底停止所有自动启动）
 cat > "$CLIENT_DIR/stop_simple.sh" << 'STOP_EOF'
 #!/bin/bash
 
 CLIENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$CLIENT_DIR"
 
-echo "Stopping B-Server Client..."
+echo "=== 彻底停止B-Server客户端 ==="
+echo ""
 
-# 从PID文件停止
+# 1. 停止当前运行的进程
+echo "[1] 停止当前运行的进程..."
 if [ -f "client.pid" ]; then
     PID=$(cat client.pid)
     if ps -p $PID > /dev/null 2>&1; then
         kill $PID
-        echo "Stopped client with PID: $PID"
+        echo "✅ 已停止进程 PID: $PID"
         rm -f client.pid
     else
-        echo "Client process not found, cleaning up PID file"
+        echo "🔍 PID文件存在但进程未运行，清理PID文件"
         rm -f client.pid
     fi
 else
-    echo "No PID file found"
+    echo "🔍 未找到PID文件"
 fi
 
-# 确保所有相关进程都停止
-pkill -f "python3.*client.py" || true
-echo "B-Server Client stopped"
+# 强制停止所有相关进程
+pkill -f "python3.*client.py" 2>/dev/null && echo "✅ 已强制停止所有client.py进程" || echo "🔍 未找到其他client.py进程"
+
+# 2. 临时禁用systemd服务（如果存在）
+echo ""
+echo "[2] 检查并临时停止systemd服务..."
+if command -v systemctl &> /dev/null; then
+    SERVICE_NAME="b-server-client.service"
+    
+    # 检查服务是否存在且正在运行
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo "🔍 发现运行中的systemd服务，正在停止..."
+        if sudo systemctl stop "$SERVICE_NAME" 2>/dev/null; then
+            echo "✅ systemd服务已停止"
+        else
+            echo "❌ 停止systemd服务失败"
+        fi
+    elif systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo "🔍 发现已启用的systemd服务（未运行）"
+        echo "ℹ️  服务已停止，但仍会在重启后自动启动"
+        echo "ℹ️  如需永久禁用，请运行: sudo systemctl disable $SERVICE_NAME"
+    else
+        echo "🔍 未找到systemd服务"
+    fi
+else
+    echo "🔍 系统不支持systemd"
+fi
+
+# 3. 创建临时标记文件，防止其他启动机制重启
+echo ""
+echo "[3] 创建停止标记文件..."
+echo "$(date): 客户端已手动停止" > "$CLIENT_DIR/.stopped"
+echo "✅ 已创建停止标记文件"
+
+# 4. 检查其他可能的启动机制
+echo ""
+echo "[4] 检查其他自动启动机制..."
+
+# 检查rc.local
+if [ -f "/etc/rc.local" ] && grep -q "$CLIENT_DIR" /etc/rc.local; then
+    echo "⚠️  发现rc.local启动项，仍会在重启后自动启动"
+    echo "ℹ️  如需永久移除，请运行: sudo sed -i '\\|$CLIENT_DIR|d' /etc/rc.local"
+fi
+
+# 检查cron任务
+if crontab -l 2>/dev/null | grep -q "$CLIENT_DIR"; then
+    echo "⚠️  发现cron任务，仍会在重启后自动启动"
+    echo "ℹ️  如需永久移除，请运行: crontab -e 并删除相关行"
+fi
+
+# 5. 显示最终状态
+echo ""
+echo "=== 停止完成 ==="
+echo "✅ 当前进程已停止"
+echo "✅ 已创建停止标记文件"
+echo ""
+echo "重要提示:"
+echo "• 客户端当前已完全停止"
+echo "• 停止标记文件可防止意外重启"
+echo "• 如需重新启动: rm -f .stopped && ./run_client.sh"
+echo "• 如需永久禁用自动启动，请运行: ./uninstall.sh"
+echo ""
+echo "启动相关命令:"
+echo "• 重新启动客户端: ./run_client.sh"
+echo "• 查看当前状态: ./status.sh"
+echo "• 永久禁用自动启动: ./uninstall.sh"
 STOP_EOF
 
 chmod +x "$CLIENT_DIR/stop_simple.sh"
@@ -1032,6 +1230,7 @@ echo "  2. 请确保服务器防火墙允许8008端口访问"
 echo "  3. 客户端日志位置: $CLIENT_DIR/client.log"
 echo "  4. 新版本使用简单的PID管理，不再依赖supervisor"
 echo "  5. 使用 ./run_client.sh 和 ./stop_simple.sh 来控制服务"
-echo "  6. 旧的脚本 ./start.sh 和 ./stop.sh 保持兼容性"
+echo "  6. 停止客户端时会创建停止标记文件，防止自动重启"
+echo "  7. 如需重新启动已停止的客户端，运行 ./run_client.sh 即可"
 echo ""
 log_info "安装完成！客户端正在运行中..." 
