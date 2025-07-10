@@ -534,7 +534,7 @@ if errorlevel 1 (
 )
 
 echo [3] Testing SSL/TLS connectivity...
-venv\Scripts\python.exe -c "import ssl, socket; print(f'SSL version: {ssl.ssl_version}'); print('SSL connectivity test passed')"
+venv\Scripts\python.exe -c "import ssl, socket; print('SSL version: ' + ssl.ssl_version); print('SSL connectivity test passed')"
 if errorlevel 1 (
     echo [WARNING] SSL/TLS connectivity issues detected
     echo This may cause problems with pip and network requests
@@ -559,7 +559,7 @@ if errorlevel 1 (
 )
 
 echo [5] Testing client configuration...
-venv\Scripts\python.exe -c "exec(open('client.py').read().split('if __name__')[0]); print(f'SERVER_URL: {SERVER_URL}'); print(f'NODE_NAME: {NODE_NAME}')"
+venv\Scripts\python.exe -c "exec(open('client.py').read().split('if __name__')[0]); print('SERVER_URL: ' + SERVER_URL); print('NODE_NAME: ' + NODE_NAME)"
 if errorlevel 1 (
     echo [ERROR] Client configuration error
     goto :end
@@ -628,7 +628,7 @@ pause
     Set-Content -Path "update.bat" -Value $updateScript -Encoding UTF8
 
     # SSL修复脚本 - 专门处理SSL证书问题
-    $sslFixScript = (@'
+    $sslFixScript = @'
 @echo off
 cd /d "%~dp0"
 echo ========================================
@@ -640,7 +640,7 @@ echo that may prevent Python packages from installing.
 echo.
 
 echo [1] Checking current SSL configuration...
-venv\Scripts\python.exe -c "import ssl; print(f'SSL version: {ssl.ssl_version}'); print('Current SSL configuration OK')"
+venv\Scripts\python.exe -c "import ssl; print('SSL version: ' + ssl.ssl_version); print('Current SSL configuration OK')"
 if errorlevel 1 (
     echo [WARNING] SSL configuration issues detected
 )
@@ -698,7 +698,7 @@ echo ========================================
 echo SSL Fix Script Completed
 echo ========================================
 pause
-'@) -f $ServerIP, $NodeName
+'@
     Set-Content -Path "fix_ssl.bat" -Value $sslFixScript -Encoding UTF8
 
     Write-ColorOutput "[SUCCESS] Management scripts created successfully" "Green"
@@ -737,7 +737,7 @@ try:
     import socket, psutil, socketio, requests
     print('[SUCCESS] All dependency modules imported successfully')
 except ImportError as e:
-    print(f'[ERROR] Dependency module import failed: {e}')
+    print('[ERROR] Dependency module import failed: ' + str(e))
     sys.exit(1)
 
 # Check configuration
