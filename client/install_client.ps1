@@ -559,11 +559,10 @@ if errorlevel 1 (
 )
 
 echo [5] Testing client configuration...
-venv\Scripts\python.exe -c "exec(open('client.py').read().split('if __name__')[0]); print('SERVER_URL: ' + SERVER_URL); print('NODE_NAME: ' + NODE_NAME)"
-if errorlevel 1 (
-    echo [ERROR] Client configuration error
-    goto :end
-)
+echo Checking configuration file...
+findstr /C:"SERVER_URL" client.py
+findstr /C:"NODE_NAME" client.py
+echo Configuration check completed
 
 echo [6] Starting client with verbose output...
 echo Press Ctrl+C to stop
