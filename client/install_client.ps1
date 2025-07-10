@@ -86,7 +86,8 @@ function Install-BServerClient {
     Write-ColorOutput ("[DEBUG] Raw NodeName: '" + $NodeName + "'") "Yellow"
     
     # 检查节点名称是否包含特殊字符并提供建议
-    $hasSpecialChars = $NodeName.Contains('$') -or $NodeName.Contains('(') -or $NodeName.Contains(')') -or $NodeName.Contains('[') -or $NodeName.Contains(']') -or $NodeName.Contains('&') -or $NodeName.Contains('|')
+    $dollarSign = '$'
+    $hasSpecialChars = $NodeName.Contains($dollarSign) -or $NodeName.Contains('(') -or $NodeName.Contains(')') -or $NodeName.Contains('[') -or $NodeName.Contains(']') -or $NodeName.Contains('&') -or $NodeName.Contains('|')
     if ($hasSpecialChars) {
         Write-ColorOutput "[WARNING] Node name contains special characters that may cause issues!" "Yellow"
         $base64NodeName = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($NodeName))
@@ -191,7 +192,8 @@ function Install-BServerClient {
         # 额外验证：显示实际的节点名称长度和内容
         Write-ColorOutput ("[DEBUG] Node Name length: " + $NodeName.Length) "Yellow"
         Write-ColorOutput ("[DEBUG] Node Name bytes: " + [System.Text.Encoding]::UTF8.GetBytes($NodeName).Length) "Yellow"
-        Write-ColorOutput ("[DEBUG] Node Name contains dollar sign: " + $NodeName.Contains('$')) "Yellow"
+        $dollarSign = '$'
+        Write-ColorOutput ("[DEBUG] Node Name contains dollar sign: " + $NodeName.Contains($dollarSign)) "Yellow"
         
         if ($serverUrlFound -and $nodeNameFound) {
             Write-ColorOutput "[SUCCESS] Client configuration modified successfully" "Green"
