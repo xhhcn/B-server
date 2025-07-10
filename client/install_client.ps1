@@ -729,47 +729,63 @@ Write-Host "4. Run: .\nssm.exe start `$serviceName"
     # Test client configuration
     Write-ColorOutput "[INFO] Testing client configuration..." "Blue"
     try {
-        # Create test script dynamically to avoid variable interpolation issues
-        $testContent = (@'
-import sys, os
-sys.path.insert(0, os.getcwd())
-try:
-    import socket, psutil, socketio, requests
-    print('[SUCCESS] All dependency modules imported successfully')
-except ImportError as e:
-    print('[ERROR] Dependency module import failed: ' + str(e))
-    sys.exit(1)
-
-# Check configuration
-with open('client.py', 'r', encoding='utf-8') as f:
-    content = f.read()
-    if 'http://{0}:8008' in content:
-        print('[SUCCESS] Server address configured correctly')
-    else:
-        print('[ERROR] Server address configuration error')
-        sys.exit(1)
-    
-    if "NODE_NAME = '{1}'" in content:
-        print('[SUCCESS] Node name configured correctly')
-    else:
-        print('[ERROR] Node name configuration error')
-        sys.exit(1)
-
-print('[SUCCESS] Client configuration test passed')
-'@) -f $ServerIP, $NodeName
-
-        $testResult = & ".\venv\Scripts\python.exe" -c $testContent
-
+        # Test 1: Check if Python modules can be imported
+        $moduleTest = & ".\venv\Scripts\python.exe" -c "import socket, psutil, socketio, requests; print('All modules imported successfully')" 2>&1
         if ($LASTEXITCODE -eq 0) {
+            Write-ColorOutput "[SUCCESS] All dependency modules imported successfully" "Green"
+        } else {
+            Write-ColorOutput "[ERROR] Dependency module import failed: $moduleTest" "Red"
+            throw "Module import test failed"
+        }
+
+        # Test 2: Check if client.py file exists and has correct configuration
+        if (Test-Path "client.py") {
+            $clientContent = Get-Content "client.py" -Raw -Encoding UTF8
+            
+            # Check server URL configuration
+            $expectedServerUrl = "SERVER_URL = 'http://$ServerIP`:8008'"
+            if ($clientContent -match [regex]::Escape($expectedServerUrl)) {
+                Write-ColorOutput "[SUCCESS] Server address configured correctly" "Green"
+            } else {
+                Write-ColorOutput "[ERROR] Server address configuration error" "Red"
+                Write-ColorOutput "[DEBUG] Expected: $expectedServerUrl" "Yellow"
+                throw "Server URL configuration test failed"
+            }
+            
+            # Check node name configuration
+            $expectedNodeName = "NODE_NAME = '$NodeName'"
+            if ($clientContent -match [regex]::Escape($expectedNodeName)) {
+                Write-ColorOutput "[SUCCESS] Node name configured correctly" "Green"
+            } else {
+                Write-ColorOutput "[ERROR] Node name configuration error" "Red"
+                Write-ColorOutput "[DEBUG] Expected: $expectedNodeName" "Yellow"
+                throw "Node name configuration test failed"
+            }
+            
             Write-ColorOutput "[SUCCESS] Client configuration test passed" "Green"
         } else {
-            throw "Configuration test failed"
+            Write-ColorOutput "[ERROR] client.py file not found" "Red"
+            throw "Client file test failed"
         }
     }
     catch {
-        Write-ColorOutput "[ERROR] Client configuration test failed" "Red"
+        Write-ColorOutput "[ERROR] Client configuration test failed: $($_.Exception.Message)" "Red"
         Write-ColorOutput "[INFO] Continuing with installation..." "Yellow"
         # Don't exit due to test failure, continue installation process
+        
+        # Provide debugging information
+        Write-ColorOutput "[DEBUG] Configuration file verification:" "Yellow"
+        if (Test-Path "client.py") {
+            $debugContent = Get-Content "client.py" -TotalCount 30 -Encoding UTF8
+            Write-ColorOutput "[DEBUG] First 30 lines of client.py:" "Yellow"
+            for ($i = 0; $i -lt $debugContent.Length; $i++) {
+                if ($debugContent[$i] -match "SERVER_URL|NODE_NAME") {
+                    Write-ColorOutput "[DEBUG] Line $($i+1): $($debugContent[$i])" "Cyan"
+                }
+            }
+        } else {
+            Write-ColorOutput "[DEBUG] client.py file does not exist" "Yellow"
+        }
     }
 
     # Display installation completion information
