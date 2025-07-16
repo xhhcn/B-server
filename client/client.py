@@ -228,8 +228,8 @@ def detect_windows_system_type():
                         system_type = "KVM"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
                         break
-                    # 🔧 修复Hyper-V BIOS检测：更精确的条件
-                    elif ('hyper-v' in bios_version or 'microsoft' in bios_version) and 'microsoft' in bios_manufacturer:
+                    # 🔧 修复Hyper-V BIOS检测：仅在明确的虚拟机BIOS时才判断
+                    elif 'hyper-v' in bios_version and 'microsoft' in bios_manufacturer:
                         system_type = "Hyper-V"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过BIOS)")
                         break
@@ -259,9 +259,8 @@ def detect_windows_system_type():
                     elif 'virtualbox' in systeminfo_output:
                         system_type = "VirtualBox"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
-                    # 🔧 修复systeminfo Hyper-V检测：更精确的条件
-                    elif ('hyper-v' in systeminfo_output) or \
-                         ('virtual machine' in systeminfo_output and 'microsoft corporation' in systeminfo_output):
+                    # 🔧 修复systeminfo Hyper-V检测：仅在明确显示为虚拟机时才判断
+                    elif 'hyper-v' in systeminfo_output and 'virtual' in systeminfo_output:
                         system_type = "Hyper-V"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
                     elif 'qemu' in systeminfo_output:
@@ -336,10 +335,10 @@ def detect_windows_system_type():
             except Exception as reg_error:
                 print(f"[DEBUG] 注册表检测失败: {reg_error}")
         
-        # 方法4：检查Windows服务和驱动程序
+        # 方法4：检查Windows服务和驱动程序（仅检测明确的第三方虚拟化）
         if system_type == "DS":
             try:
-                print("[DEBUG] 检查虚拟化服务...")
+                print("[DEBUG] 检查第三方虚拟化服务...")
                 service_result = subprocess.run(['sc', 'query', 'type=', 'driver'], 
                                               capture_output=True, text=True, timeout=5)
                 if service_result.returncode == 0:
@@ -351,90 +350,113 @@ def detect_windows_system_type():
                     elif 'vbox' in services_output or 'virtualbox' in services_output:
                         system_type = "VirtualBox"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过服务检查)")
-                    # 🔧 增强Hyper-V服务检测
-                    elif any(hv_service in services_output for hv_service in [
-                        'hvboot', 'hypervideo', 'vmbus', 'storvsc', 'netvsc', 'vmickvpexchange', 'vmicguestinterface'
-                    ]):
-                        system_type = "Hyper-V"
-                        print(f"[INFO] 检测到系统类型: {system_type} (通过服务检查)")
+                    # 🔧 移除Hyper-V服务检测 - 这些服务在Hyper-V主机上也存在
+                    # 不能通过服务存在来判断是否为Hyper-V虚拟机
             except Exception as service_error:
                 print(f"[DEBUG] 服务检查失败: {service_error}")
         
-        # 🔧 方法5：专门的Hyper-V检测方法（新增）
+        # 🔧 方法5：专门的Hyper-V虚拟机检测（重新设计）
         if system_type == "DS":
             try:
-                print("[DEBUG] 进行专门的Hyper-V检测...")
+                print("[DEBUG] 进行专门的Hyper-V虚拟机检测...")
                 
-                # 检查Hyper-V特有的注册表项
+                # 🔧 关键区别：检测是否为"客户机"而不是"主机"
+                # 只有在虚拟机中才会有这些特定的注册表项和配置
+                
+                hyper_v_guest_indicators = 0
+                
+                # 检查Hyper-V虚拟机客户端特有的注册表项
                 try:
                     import winreg
-                    # 检查虚拟机检测标记
-                    hv_key_paths = [
-                        r"SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters",
-                        r"SYSTEM\ControlSet001\Services\vmbus",
-                        r"SYSTEM\ControlSet001\Services\storvsc", 
-                        r"SYSTEM\ControlSet001\Services\netvsc",
-                        r"SYSTEM\CurrentControlSet\Services\vmbus",
-                        r"SYSTEM\CurrentControlSet\Services\storvsc",
-                        r"SYSTEM\CurrentControlSet\Services\netvsc"
+                    
+                    # 这个注册表项只有在Hyper-V虚拟机中才存在，物理主机上不会有
+                    guest_only_keys = [
+                        r"SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters"
                     ]
                     
-                    for key_path in hv_key_paths:
+                    for key_path in guest_only_keys:
                         try:
                             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
                             winreg.CloseKey(key)
-                            print(f"[DEBUG] 发现Hyper-V注册表项: {key_path}")
-                            system_type = "Hyper-V"
-                            print(f"[INFO] 检测到系统类型: {system_type} (通过Hyper-V注册表)")
-                            break
+                            print(f"[DEBUG] 发现Hyper-V虚拟机专用注册表项: {key_path}")
+                            hyper_v_guest_indicators += 1
                         except FileNotFoundError:
                             continue
                         except Exception:
                             continue
+                            
+                    # 检查虚拟机集成服务（Integration Services）
+                    # 这些服务只在虚拟机中运行，不在物理主机上运行
+                    vm_integration_services = [
+                        r"SYSTEM\CurrentControlSet\Services\vmicheartbeat",
+                        r"SYSTEM\CurrentControlSet\Services\vmicshutdown", 
+                        r"SYSTEM\CurrentControlSet\Services\vmictimesync",
+                        r"SYSTEM\CurrentControlSet\Services\vmickvpexchange"
+                    ]
+                    
+                    for service_key in vm_integration_services:
+                        try:
+                            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, service_key)
+                            # 检查服务状态，确保它是活动的
+                            try:
+                                start_value = winreg.QueryValueEx(key, "Start")[0]
+                                if start_value in [2, 3]:  # 自动启动或手动启动
+                                    print(f"[DEBUG] 发现活动的虚拟机集成服务: {service_key}")
+                                    hyper_v_guest_indicators += 1
+                                    break  # 找到一个就够了
+                            except:
+                                pass
+                            winreg.CloseKey(key)
+                        except FileNotFoundError:
+                            continue
+                        except Exception:
+                            continue
+                            
                 except ImportError:
                     pass
                     
-                # 检查Hyper-V特有的文件
-                if system_type == "DS":
-                    hv_files = [
-                        r"C:\Windows\System32\drivers\vmbus.sys",
-                        r"C:\Windows\System32\drivers\storvsc.sys",
-                        r"C:\Windows\System32\drivers\netvsc.sys"
-                    ]
-                    
-                    for hv_file in hv_files:
-                        if os.path.exists(hv_file):
-                            print(f"[DEBUG] 发现Hyper-V驱动文件: {hv_file}")
-                            system_type = "Hyper-V"
-                            print(f"[INFO] 检测到系统类型: {system_type} (通过Hyper-V驱动文件)")
-                            break
-                            
-                # 检查特定的环境变量或进程
-                if system_type == "DS":
+                # 检查虚拟机特有的硬件特征
+                if hyper_v_guest_indicators == 0:
                     try:
-                        # 检查VMware和VirtualBox的进程，如果不存在但有其他虚拟化特征，可能是Hyper-V
-                        tasklist_result = subprocess.run(['tasklist'], capture_output=True, text=True, timeout=5)
-                        if tasklist_result.returncode == 0:
-                            process_list = tasklist_result.stdout.lower()
-                            
-                            # 如果发现虚拟机特征但没有VMware/VirtualBox进程，可能是Hyper-V
-                            has_vm_indicators = any(indicator in process_list for indicator in [
-                                'winlogon.exe', 'csrss.exe'  # 这些是检查是否有基本系统进程
-                            ])
-                            
-                            # 检查是否有明确的非Hyper-V虚拟化进程
-                            has_other_vm = any(vm_proc in process_list for vm_proc in [
-                                'vmtoolsd.exe', 'vboxservice.exe', 'vboxtray.exe'
-                            ])
-                            
-                            if has_vm_indicators and not has_other_vm:
-                                print(f"[DEBUG] 系统进程检查：可能是Hyper-V环境")
-                                # 这里不直接判断为Hyper-V，而是标记为可疑，需要更多证据
+                        if 'c' in locals():  # WMI可用
+                            # 检查计算机系统的TotalPhysicalMemory和其他特征
+                            for computer_system in c.Win32_ComputerSystem():
+                                # 在Hyper-V虚拟机中，某些硬件信息会有特定的特征
+                                total_memory = computer_system.TotalPhysicalMemory
+                                if total_memory:
+                                    # 虚拟机的内存通常是特定的数值（如512MB、1GB、2GB等整数值）
+                                    memory_gb = int(total_memory) / (1024**3)
+                                    if memory_gb.is_integer() and memory_gb <= 64:
+                                        print(f"[DEBUG] 内存大小呈现虚拟机特征: {memory_gb}GB")
+                                        # 这不是决定性证据，只是指示器
+                                
+                                # 检查BIOS序列号和版本
+                                for bios in c.Win32_BIOS():
+                                    serial_number = bios.SerialNumber if bios.SerialNumber else ""
+                                    version = bios.Version.lower() if bios.Version else ""
+                                    
+                                    # Hyper-V虚拟机的特定BIOS特征
+                                    if any(hv_indicator in version for hv_indicator in [
+                                        'microsoft corporation', 'hyper-v'
+                                    ]) and any(vm_indicator in serial_number for vm_indicator in [
+                                        'none', '0', 'virtual'
+                                    ]):
+                                        print(f"[DEBUG] BIOS显示Hyper-V虚拟机特征")
+                                        hyper_v_guest_indicators += 1
+                                    break
+                                break
                     except Exception:
                         pass
+                
+                # 最终判断
+                if hyper_v_guest_indicators >= 1:
+                    system_type = "Hyper-V"
+                    print(f"[INFO] 检测到系统类型: {system_type} (通过虚拟机特征检测，指标数: {hyper_v_guest_indicators})")
+                else:
+                    print(f"[DEBUG] 未发现Hyper-V虚拟机特征，可能是物理机或Hyper-V主机")
                         
             except Exception as hv_detection_error:
-                print(f"[DEBUG] Hyper-V专门检测失败: {hv_detection_error}")
+                print(f"[DEBUG] Hyper-V虚拟机检测失败: {hv_detection_error}")
         
         # 🔧 方法6：CPU特征检测增强（针对虚拟化标志）
         if system_type == "DS":
@@ -543,6 +565,21 @@ def detect_windows_system_type():
             except Exception:
                 pass
             
+            # 🔧 增强判断：检查是否安装了Hyper-V角色（物理主机）
+            if physical_indicators >= 1:
+                try:
+                    # 检查是否安装了Hyper-V角色
+                    powershell_result = subprocess.run([
+                        'powershell', '-Command', 
+                        'Get-WindowsFeature -Name Hyper-V | Select-Object InstallState'
+                    ], capture_output=True, text=True, timeout=10)
+                    
+                    if powershell_result.returncode == 0 and 'installed' in powershell_result.stdout.lower():
+                        physical_indicators += 2  # 额外加分，因为这表明是Hyper-V主机
+                        print(f"[DEBUG] 检测到Hyper-V角色已安装，这是Hyper-V主机（物理机）")
+                except Exception:
+                    pass
+            
             # 综合判断
             print(f"[DEBUG] 物理机指标得分: {physical_indicators}")
             
@@ -550,11 +587,12 @@ def detect_windows_system_type():
                 print(f"[DEBUG] 物理机指标充足，确认为物理机")
                 system_type = "DS"
             elif physical_indicators >= 1:
-                print(f"[DEBUG] 有一定物理机特征，但不够明确")
-                # 保持默认的DS判断
+                print(f"[DEBUG] 有一定物理机特征，倾向于判断为物理机")
+                # 倾向于保持DS判断，因为有物理机特征
+                system_type = "DS"
             else:
-                print(f"[DEBUG] 缺乏明确的物理机特征，可能是未识别的虚拟化环境")
-                # 保持默认的DS判断，但会在日志中显示警告
+                print(f"[DEBUG] 缺乏明确的物理机特征，保持当前判断")
+                # 保持当前的system_type
                 
         except Exception as physical_detection_error:
             print(f"[DEBUG] 物理机确认检测失败: {physical_detection_error}")
@@ -567,9 +605,61 @@ def detect_windows_system_type():
     
     print(f"[INFO] Windows系统检测完成: {system_type}")
     
+    # 🔧 最终安全检查：防止Hyper-V主机被误判为虚拟机
+    if system_type == "Hyper-V":
+        try:
+            print(f"[DEBUG] 对Hyper-V检测结果进行最终验证...")
+            
+            # 检查是否安装了Hyper-V管理工具或角色
+            # 如果安装了这些，说明这是Hyper-V主机，不是虚拟机
+            host_indicators = 0
+            
+            # 方法1：检查Hyper-V管理服务
+            try:
+                mgmt_result = subprocess.run(['sc', 'query', 'vmms'], 
+                                           capture_output=True, text=True, timeout=5)
+                if mgmt_result.returncode == 0 and 'running' in mgmt_result.stdout.lower():
+                    host_indicators += 1
+                    print(f"[DEBUG] 发现Hyper-V管理服务正在运行，这可能是Hyper-V主机")
+            except Exception:
+                pass
+            
+            # 方法2：检查Hyper-V角色安装状态
+            try:
+                dism_result = subprocess.run([
+                    'dism', '/online', '/get-features', '/featurename:Microsoft-Hyper-V'
+                ], capture_output=True, text=True, timeout=10)
+                if dism_result.returncode == 0 and 'enabled' in dism_result.stdout.lower():
+                    host_indicators += 1
+                    print(f"[DEBUG] 发现Hyper-V功能已启用，这可能是Hyper-V主机")
+            except Exception:
+                pass
+            
+            # 方法3：检查虚拟机管理目录
+            hv_host_dirs = [
+                r"C:\ProgramData\Microsoft\Windows\Hyper-V",
+                r"C:\Program Files\Hyper-V"
+            ]
+            
+            for hv_dir in hv_host_dirs:
+                if os.path.exists(hv_dir):
+                    host_indicators += 1
+                    print(f"[DEBUG] 发现Hyper-V主机目录: {hv_dir}")
+                    break
+            
+            # 如果发现多个主机指标，重新判断为物理机
+            if host_indicators >= 2:
+                print(f"[WARN] 发现{host_indicators}个Hyper-V主机指标，重新判断为物理机")
+                system_type = "DS"
+            else:
+                print(f"[DEBUG] Hyper-V主机指标不足({host_indicators})，确认为虚拟机")
+                
+        except Exception as final_check_error:
+            print(f"[DEBUG] 最终验证失败: {final_check_error}")
+    
     # 🔧 最终检测总结
     if system_type == "DS":
-        print(f"[INFO] 确认检测结果为物理机（DS）- 未发现虚拟化特征")
+        print(f"[INFO] 确认检测结果为物理机（DS）- 独立服务器或Hyper-V主机")
     else:
         print(f"[INFO] 确认检测结果为虚拟化环境: {system_type}")
     
