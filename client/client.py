@@ -245,6 +245,43 @@ def detect_windows_system_type():
         except Exception as wmi_error:
             print(f"[DEBUG] WMI检测失败: {wmi_error}")
     
+        # 🔧 WMI失败后的早期物理机检测
+        if system_type == "DS":
+            try:
+                print("[DEBUG] WMI不可用，进行早期物理机特征检测...")
+                early_physical_indicators = 0
+                
+                # 检查明显的物理机特征
+                physical_files = [
+                    r"C:\Windows\System32\vmms.exe",  # Hyper-V主机文件
+                    r"C:\Program Files\Hyper-V",      # Hyper-V主机程序
+                ]
+                
+                for pf in physical_files:
+                    if os.path.exists(pf):
+                        early_physical_indicators += 1
+                        print(f"[DEBUG] 早期检测发现物理机特征: {pf}")
+                
+                # 检查服务（简单方式）
+                try:
+                    vmms_check = subprocess.run(['sc', 'query', 'vmms'], 
+                                              capture_output=True, text=True, timeout=3)
+                    if vmms_check.returncode == 0:
+                        early_physical_indicators += 1
+                        print(f"[DEBUG] 早期检测发现VMMS服务存在")
+                except:
+                    pass
+                
+                if early_physical_indicators >= 1:
+                    print(f"[INFO] 早期检测发现{early_physical_indicators}个物理机特征，跳过后续虚拟化检测")
+                    system_type = "DS"
+                    # 直接跳到最后，不执行后续的systeminfo等检测
+                else:
+                    print(f"[DEBUG] 早期检测未发现明显物理机特征，继续后续检测")
+                    
+            except Exception as early_check_error:
+                print(f"[DEBUG] 早期物理机检测失败: {early_check_error}")
+    
         # 方法2：使用systeminfo命令（Windows内置）
         if system_type == "DS":
             try:
@@ -259,10 +296,36 @@ def detect_windows_system_type():
                     elif 'virtualbox' in systeminfo_output:
                         system_type = "VirtualBox"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
-                    # 🔧 修复systeminfo Hyper-V检测：仅在明确显示为虚拟机时才判断
-                    elif 'hyper-v' in systeminfo_output and 'virtual' in systeminfo_output:
-                        system_type = "Hyper-V"
-                        print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
+                    # 🔧 修复systeminfo Hyper-V检测：区分虚拟机和支持虚拟化的物理机
+                    elif 'hyper-v' in systeminfo_output:
+                        # 进一步分析systeminfo输出，区分虚拟机和物理主机
+                        print(f"[DEBUG] systeminfo中发现hyper-v相关信息，进行详细分析...")
+                        
+                        # 虚拟机的明确特征
+                        vm_indicators = [
+                            'system model:.*virtual machine',
+                            'system manufacturer:.*microsoft corporation',
+                            'bios version:.*hyper-v',
+                            'virtual machine'
+                        ]
+                        
+                        # 物理主机的特征（安装了Hyper-V角色）
+                        host_indicators = [
+                            'hyper-v requirements',
+                            'vm monitor mode extensions',
+                            'virtualization enabled in firmware',
+                            'data execution prevention available'
+                        ]
+                        
+                        is_vm = any(vm_pattern in systeminfo_output for vm_pattern in vm_indicators)
+                        is_host = any(host_pattern in systeminfo_output for host_pattern in host_indicators)
+                        
+                        if is_vm and not is_host:
+                            system_type = "Hyper-V"
+                            print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo-虚拟机特征)")
+                        else:
+                            print(f"[DEBUG] systeminfo显示Hyper-V功能，但特征倾向于物理主机，继续其他检测...")
+                    # 注意：这里移除了原来过于宽泛的检测条件
                     elif 'qemu' in systeminfo_output:
                         system_type = "QEMU"
                         print(f"[INFO] 检测到系统类型: {system_type} (通过systeminfo)")
@@ -618,41 +681,142 @@ def detect_windows_system_type():
             try:
                 mgmt_result = subprocess.run(['sc', 'query', 'vmms'], 
                                            capture_output=True, text=True, timeout=5)
-                if mgmt_result.returncode == 0 and 'running' in mgmt_result.stdout.lower():
-                    host_indicators += 1
-                    print(f"[DEBUG] 发现Hyper-V管理服务正在运行，这可能是Hyper-V主机")
+                if mgmt_result.returncode == 0:
+                    print(f"[DEBUG] VMMS服务查询结果: {mgmt_result.stdout[:200]}...")
+                    if 'running' in mgmt_result.stdout.lower() or 'state' in mgmt_result.stdout.lower():
+                        host_indicators += 1
+                        print(f"[DEBUG] 发现Hyper-V管理服务，这是Hyper-V主机")
+            except Exception as e:
+                print(f"[DEBUG] VMMS服务查询失败: {e}")
+            
+            # 方法2：检查更多的Hyper-V相关服务
+            try:
+                hv_services = ['vmms', 'hvhost', 'vmcompute']
+                for service in hv_services:
+                    service_result = subprocess.run(['sc', 'query', service], 
+                                                  capture_output=True, text=True, timeout=5)
+                    if service_result.returncode == 0:
+                        print(f"[DEBUG] 服务 {service} 存在，这表明是Hyper-V主机")
+                        host_indicators += 1
+                        break
             except Exception:
                 pass
             
-            # 方法2：检查Hyper-V角色安装状态
+            # 方法3：检查Hyper-V角色安装状态（多种方法）
             try:
+                # 方法3a：使用dism
                 dism_result = subprocess.run([
                     'dism', '/online', '/get-features', '/featurename:Microsoft-Hyper-V'
                 ], capture_output=True, text=True, timeout=10)
-                if dism_result.returncode == 0 and 'enabled' in dism_result.stdout.lower():
-                    host_indicators += 1
-                    print(f"[DEBUG] 发现Hyper-V功能已启用，这可能是Hyper-V主机")
-            except Exception:
-                pass
+                if dism_result.returncode == 0:
+                    print(f"[DEBUG] DISM查询结果: {dism_result.stdout[:200]}...")
+                    if 'enabled' in dism_result.stdout.lower():
+                        host_indicators += 1
+                        print(f"[DEBUG] 通过DISM发现Hyper-V功能已启用")
+            except Exception as e:
+                print(f"[DEBUG] DISM查询失败: {e}")
             
-            # 方法3：检查虚拟机管理目录
-            hv_host_dirs = [
+            try:
+                # 方法3b：使用PowerShell (Get-WindowsFeature)
+                ps_result = subprocess.run([
+                    'powershell', '-Command', 
+                    'Get-WindowsFeature -Name Hyper-V'
+                ], capture_output=True, text=True, timeout=10)
+                if ps_result.returncode == 0:
+                    print(f"[DEBUG] PowerShell Get-WindowsFeature结果: {ps_result.stdout[:200]}...")
+                    if 'installed' in ps_result.stdout.lower():
+                        host_indicators += 1
+                        print(f"[DEBUG] 通过PowerShell发现Hyper-V功能已安装")
+            except Exception as e:
+                print(f"[DEBUG] PowerShell Get-WindowsFeature查询失败: {e}")
+            
+            try:
+                # 方法3c：使用PowerShell (Get-WindowsOptionalFeature)
+                ps_opt_result = subprocess.run([
+                    'powershell', '-Command', 
+                    'Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All'
+                ], capture_output=True, text=True, timeout=10)
+                if ps_opt_result.returncode == 0:
+                    print(f"[DEBUG] PowerShell OptionalFeature结果: {ps_opt_result.stdout[:200]}...")
+                    if 'enabled' in ps_opt_result.stdout.lower():
+                        host_indicators += 1
+                        print(f"[DEBUG] 通过PowerShell OptionalFeature发现Hyper-V已启用")
+            except Exception as e:
+                print(f"[DEBUG] PowerShell OptionalFeature查询失败: {e}")
+            
+            # 方法4：检查虚拟机管理目录和文件
+            hv_host_paths = [
                 r"C:\ProgramData\Microsoft\Windows\Hyper-V",
-                r"C:\Program Files\Hyper-V"
+                r"C:\Program Files\Hyper-V",
+                r"C:\Windows\System32\vmms.exe",
+                r"C:\Windows\System32\vmwp.exe"
             ]
             
-            for hv_dir in hv_host_dirs:
-                if os.path.exists(hv_dir):
+            for hv_path in hv_host_paths:
+                if os.path.exists(hv_path):
                     host_indicators += 1
-                    print(f"[DEBUG] 发现Hyper-V主机目录: {hv_dir}")
+                    print(f"[DEBUG] 发现Hyper-V主机路径: {hv_path}")
                     break
             
-            # 如果发现多个主机指标，重新判断为物理机
-            if host_indicators >= 2:
+            # 方法5：通过注册表检查Hyper-V主机特征
+            try:
+                import winreg
+                # 检查Hyper-V主机特有的注册表项
+                host_reg_keys = [
+                    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization",
+                    r"SOFTWARE\Microsoft\Hyper-V",
+                    r"SYSTEM\CurrentControlSet\Services\vmms"
+                ]
+                
+                for reg_key in host_reg_keys:
+                    try:
+                        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_key)
+                        winreg.CloseKey(key)
+                        host_indicators += 1
+                        print(f"[DEBUG] 发现Hyper-V主机注册表项: {reg_key}")
+                        break
+                    except FileNotFoundError:
+                        continue
+                    except Exception:
+                        continue
+            except ImportError:
+                pass
+            
+            print(f"[DEBUG] 最终Hyper-V主机指标统计: {host_indicators}")
+            
+            # 🔧 降低阈值：只要发现一个主机指标，就判断为物理机
+            if host_indicators >= 1:
                 print(f"[WARN] 发现{host_indicators}个Hyper-V主机指标，重新判断为物理机")
                 system_type = "DS"
             else:
-                print(f"[DEBUG] Hyper-V主机指标不足({host_indicators})，确认为虚拟机")
+                print(f"[DEBUG] 未发现Hyper-V主机指标({host_indicators})，但可能检测方法失败")
+                print(f"[DEBUG] 进行额外的简单检测...")
+                
+                # 🔧 额外的简单检测方法
+                simple_host_check = 0
+                
+                # 检查简单的文件存在性
+                simple_files = [
+                    r"C:\Windows\System32\vmms.exe",
+                    r"C:\Windows\System32\Hyper-V"
+                ]
+                
+                for simple_file in simple_files:
+                    if os.path.exists(simple_file):
+                        simple_host_check += 1
+                        print(f"[DEBUG] 简单检测发现: {simple_file}")
+                
+                # 检查环境变量
+                if 'PROCESSOR_ARCHITECTURE' in os.environ:
+                    arch = os.environ['PROCESSOR_ARCHITECTURE']
+                    print(f"[DEBUG] 处理器架构: {arch}")
+                
+                # 如果任何简单检测成功，倾向于物理机
+                if simple_host_check > 0:
+                    print(f"[WARN] 简单检测发现{simple_host_check}个主机特征，倾向于判断为物理机")
+                    system_type = "DS"
+                else:
+                    print(f"[DEBUG] 所有检测方法都未发现主机特征，保持虚拟机判断")
                 
         except Exception as final_check_error:
             print(f"[DEBUG] 最终验证失败: {final_check_error}")
